@@ -1,0 +1,6 @@
+{
+  "vampire": {"name":"吸血鬼","role":"冠军","hp":15,"move_cost":1,"zoc":1,"kind":"MELEE_ATTACK","label":"近战攻击","range":1,"cost":4,"damage_min":2,"damage_max":4,"target_shape":"single","teleport_range":6,"teleport_cost":6},
+  "zombie": {"name":"僵尸","role":"仆役","hp":8,"move_cost":1,"zoc":1,"kind":"BITE","label":"撕咬","range":1,"cost":2,"damage_min":1,"damage_max":2,"target_shape":"single"},
+  "spearman": {"name":"矛兵","role":"人类","hp":10,"move_cost":1,"zoc":2,"kind":"SPEAR_THRUST","label":"穿刺","range":2,"cost":3,"damage_min":1,"damage_max":3,"target_shape":"spear"},
+  "archer": {"name":"弓兵","role":"人类","hp":8,"move_cost":1,"zoc":0,"kind":"SHOOT","label":"射击","range":5,"cost":2,"damage_min":1,"damage_max":3,"target_shape":"single"}
+}
