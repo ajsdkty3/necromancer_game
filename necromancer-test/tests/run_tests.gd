@@ -132,13 +132,20 @@ func test_reactions():
 	e.unit("zombie_a").hp = 1
 	events = e.execute_action(move("zombie_a",2,0))
 	check(e.unit("zombie_a").position == [1,0] and not e.unit("zombie_a").alive,"death at old cell mid path")
-	check(e.domination == 19 and count(events,"move") == 1,"uncompleted step not charged")
+	check(e.domination == 20 and count(events,"move") == 1 and count(events,"resource") == 2,"only completed step charged then death restores domination to cap")
 	check(e.occupant(Vector2i(1,0)).is_empty(),"death clears occupancy")
 	e = arrange({"zombie_a":[1,0],"spear_a":[0,0],"spear_b":[2,0],"vampire":[10,0]})
 	e.unit("spear_b").hp = 1
 	e.unit("zombie_a").hp = 100
 	events = e.execute_action(move("zombie_a",1,1))
-	check(count(events,"reaction") == 1 and not e.unit("spear_b").alive,"reaction friendly kill skips dead controller")
+	check(count(events,"reaction") == 2 and e.unit("spear_b").alive and e.unit("spear_b").hp == 1,"reaction skips friendly unit and both controllers still attack")
+	check(count(events,"damage") == 2,"no friendly damage event from reactions")
+	e = arrange({"spear_a":[0,0],"archer":[1,0],"zombie_a":[2,0]})
+	events = e.execute_action(move("zombie_a",2,1))
+	check(count(events,"damage") == 1 and e.unit("archer").hp == 8 and e.unit("zombie_a").hp < 8,"reaction skips near ally and hits far enemy")
+	e = arrange({"spear_a":[0,0],"zombie_a":[1,0],"zombie_b":[2,0]})
+	events = e.execute_action(move("zombie_a",1,1))
+	check(count(events,"damage") == 2 and e.unit("zombie_a").hp < 8 and e.unit("zombie_b").hp < 8,"reaction still hits both enemies in spear area")
 
 func test_pathfinding():
 	var e = arrange({"zombie_a":[0,0],"zombie_b":[1,0],"archer":[15,0]})
@@ -173,7 +180,23 @@ func test_ai_and_replay():
 	a.faction = "human"
 	var selected = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
 	check(selected.kind != "SPEAR_THRUST","AI penalizes friendly fire")
-	check(selected.kind == "END_UNIT","hold range when friendly fire makes attack undesirable")
+	check(selected.kind == "MOVE","reposition when all current attacks hit allies")
+	a.execute_action(selected)
+	var adjusted = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
+	check(adjusted.kind == "SPEAR_THRUST","attack after repositioning")
+	var safe_hits = a.attack_targets(a.unit("spear_a"),a.unit(adjusted.target_unit_id))
+	check(safe_hits.all(func(id): return a.unit(id).team != "human"),"repositioned attack avoids friends")
+	# Ally stands between the rear spearman and the enemy, matching the reported case.
+	a = arrange({"spear_a":[3,3],"spear_b":[4,3],"vampire":[5,3]})
+	a.faction = "human"
+	a.unit("spear_a").ap = 3
+	check(policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a")).kind == "END_UNIT","no reposition without AP reserved for attack")
+	a.unit("spear_a").ap = 6
+	selected = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
+	check(selected.kind == "MOVE","rear spearman sidesteps blocking ally")
+	a.execute_action(selected)
+	adjusted = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
+	check(adjusted.kind == "SPEAR_THRUST" and adjusted.target_unit_id == "vampire","rear spearman attacks enemy from new angle")
 	for actor_id in ["archer","spear_a"]:
 		var targeting = arrange({actor_id:[3,3],"vampire":[4,3],"zombie_a":[3,4]})
 		targeting.faction = "human"
@@ -216,8 +239,10 @@ func test_ai_and_replay():
 		check(battle.unit(actor_id).position == stopping_position,"AI stays at firing position")
 
 func test_full_battles():
-	for seed_value in [1,7,42]:
-		var e = Rules.new(seed_value)
+	for configuration in [[1,1],[7,1],[42,1],[1,2],[7,2],[1,3]]:
+		var seed_value: int = configuration[0]
+		var level: int = configuration[1]
+		var e = Rules.new(seed_value,level)
 		var policy = Policy.new()
 		var decisions = 0
 		while not e.is_terminal() and decisions < 600:
@@ -256,8 +281,8 @@ func test_full_battles():
 			check(e.domination >= 0 and e.domination <= 20,"domination invariant")
 			decisions += 1
 		check(e.is_terminal(),"full battle reaches result")
-		var replay = Rules.new(seed_value)
+		var replay = Rules.new(seed_value,level)
 		for action in e.history:
 			replay.execute_action(action)
 		check(JSON.stringify(e.get_observation()) == JSON.stringify(replay.get_observation()),"combat replay including damage and deaths")
-		print("Battle seed %d: %s, %d decisions, round %d" % [seed_value,e.winner,decisions,e.round_number])
+		print("Battle level %d seed %d: %s, %d decisions, round %d" % [level,seed_value,e.winner,decisions,e.round_number])

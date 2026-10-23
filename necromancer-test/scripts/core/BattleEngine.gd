@@ -1,6 +1,10 @@
 extends RefCounted
 
 const Hex = preload("res://scripts/core/HexGrid.gd")
+const Terrain = preload("res://scripts/core/Terrain.gd")
+const Guard = preload("res://scripts/core/GuardRules.gd")
+const Traits = preload("res://scripts/core/FactionTraits.gd")
+var heights: Dictionary = {}
 var definitions: Dictionary
 var setup: Dictionary
 var units: Array = []
@@ -13,18 +17,28 @@ var history: Array = []
 var rng = RandomNumberGenerator.new()
 var initial_seed: int
 var events: Array = []
+var level_id = 1
+var level_name = ""
 
-func _init(seed_override: int = -1):
+func _init(seed_override: int = -1, requested_level: int = 1):
 	definitions = JSON.parse_string(FileAccess.get_file_as_string("res://data/units.json"))
 	setup = JSON.parse_string(FileAccess.get_file_as_string("res://data/battle_setup.json"))
+	var levels: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://data/levels.json"))
+	level_id = requested_level if levels.has(str(requested_level)) else 1
+	var level: Dictionary = levels[str(level_id)]
+	level_name = level.name
+	heights = JSON.parse_string(FileAccess.get_file_as_string("res://data/terrain.json")).heights
 	initial_seed = int(setup.seed) if seed_override < 0 else seed_override
 	rng.seed = initial_seed
 	for entry in setup.units:
+		if entry.id not in level.unit_ids:
+			continue
 		var d = definitions[entry.archetype]
+		var offset = level.get("offset_overrides",{}).get(entry.id,entry.offset)
 		units.append({"id":entry.id,"name":entry.name,"team":entry.team,"archetype":entry.archetype,
-			"position":Hex.encode(Hex.from_offset(int(entry.offset[0]),int(entry.offset[1]))),
+			"position":Hex.encode(Hex.from_offset(int(offset[0]),int(offset[1]))),
 			"hp":int(d.hp),"max_hp":int(d.hp),"ap":6 if entry.team == "human" else 0,
-			"max_ap":6 if entry.team == "human" else 0,"alive":true})
+			"max_ap":6 if entry.team == "human" else 0,"alive":true,"guarding":false})
 
 func unit(id: String) -> Dictionary:
 	for u in units:
@@ -61,17 +75,17 @@ func get_zone_controllers(cell: Vector2i, mover_team: String) -> Array:
 	var result = []
 	for u in units:
 		var radius = int(definitions[u.archetype].zoc)
-		if u.alive and u.team != mover_team and radius > 0 and Hex.distance(pos(u),cell) <= radius:
+		if u.alive and u.team != mover_team and radius > 0 and Hex.distance(pos(u),cell) <= radius and Terrain.attack_height_allowed(heights,pos(u),cell,definitions[u.archetype].kind):
 			result.append(u.id)
 	return result
 
-# BFS distances are primary; accumulated reaction counts only break equal-length ties.
+# Weighted shortest paths: resource cost first, reaction count second.
 func path_tree(actor_id: String) -> Dictionary:
 	var u = unit(actor_id)
 	if u.is_empty() or not u.alive:
 		return {}
 	var start = pos(u)
-	var budget = resource(u) / int(definitions[u.archetype].move_cost)
+	var budget = resource(u)
 	var tree = {start: {"steps":0,"risk":0,"path":[]}}
 	var queue = [start]
 	var head = 0
@@ -86,7 +100,10 @@ func path_tree(actor_id: String) -> Dictionary:
 			var next: Vector2i = current + direction
 			if not Hex.inside(next) or not occupant(next).is_empty():
 				continue
-			var steps = info.steps + 1
+			var step = Terrain.step_cost(heights,current,next,int(definitions[u.archetype].move_cost))
+			if step < 0 or info.steps + step > budget:
+				continue
+			var steps = info.steps + step
 			if tree.has(next) and (tree[next].steps < steps or (tree[next].steps == steps and tree[next].risk <= risk)):
 				continue
 			var path = info.path.duplicate()
@@ -107,6 +124,8 @@ func find_path(actor_id: String, destination: Vector2i) -> Array:
 
 func attack_targets(actor: Dictionary, target: Dictionary) -> Array:
 	var d = definitions[actor.archetype]
+	if not Terrain.attack_height_allowed(heights,pos(actor),pos(target),d.kind):
+		return []
 	if d.target_shape == "spear":
 		for direction in Hex.DIRECTIONS:
 			for length in [1,2]:
@@ -114,7 +133,7 @@ func attack_targets(actor: Dictionary, target: Dictionary) -> Array:
 					var hits = []
 					for step in [1,2]:
 						var hit = occupant(pos(actor) + direction * step)
-						if not hit.is_empty():
+						if not hit.is_empty() and Terrain.attack_height_allowed(heights,pos(actor),pos(hit),d.kind):
 							hits.append(hit.id)
 					return hits
 	return [target.id]
@@ -129,12 +148,14 @@ func enumerate_legal_actions(actor_id: String) -> Array:
 		result.append({"actor_id":actor_id,"kind":"MOVE","target_cell":Hex.encode(cell)})
 	if resource(u) >= int(d.cost):
 		for target in units:
-			if target.alive and target.id != actor_id and Hex.distance(pos(u),pos(target)) <= int(d.range):
+			if target.alive and target.id != actor_id and Hex.distance(pos(u),pos(target)) <= int(d.range) and Terrain.attack_height_allowed(heights,pos(u),pos(target),d.kind):
 				result.append({"actor_id":actor_id,"kind":d.kind,"target_unit_id":target.id})
 	if d.has("teleport_range") and resource(u) >= int(d.teleport_cost):
 		for cell in Hex.cells():
 			if occupant(cell).is_empty() and Hex.distance(pos(u),cell) <= int(d.teleport_range):
 				result.append({"actor_id":actor_id,"kind":"TELEPORT","target_cell":Hex.encode(cell)})
+	if d.has("guard_cost") and not u.guarding and resource(u) >= int(d.guard_cost):
+		result.append({"actor_id":actor_id,"kind":"GUARD"})
 	result.append({"actor_id":actor_id,"kind":"END_UNIT" if faction == "human" else "END_TURN"})
 	return result
 
@@ -169,12 +190,30 @@ func apply_damage(source: String, target_id: String, amount: int, reason: String
 	var target = unit(target_id)
 	if is_terminal() or target.is_empty() or not target.alive:
 		return []
+	var raw_amount = amount
+	var bonus = Traits.damage_bonus(unit(source),units)
+	amount = maxi(0,amount+bonus)
+	if bonus > 0:
+		emit("damage_bonus","%s 众志成城：相邻%d名人类友军，伤害 %d → %d" % [unit(source).name,bonus,raw_amount,amount],
+			{"source":source,"target":target_id,"raw_amount":raw_amount,"bonus":bonus,"amount":amount})
+	var guardian = Guard.protector(target,units,definitions)
+	if not guardian.is_empty():
+		emit("protected","%s 受守护免伤，%d 伤害转移给 %s" % [target.name,amount,guardian.name],
+			{"source":source,"target":target_id,"guardian_id":guardian.id,"amount":amount})
+		target = guardian
+		target_id = guardian.id
 	target.hp = maxi(0,int(target.hp)-amount)
 	emit("damage","%s → %s：%d 伤害（%s），HP %d" % [unit(source).name,target.name,amount,reason,target.hp],
-		{"source":source,"target":target_id,"amount":amount,"hp":target.hp})
+		{"source":source,"target":target_id,"amount":amount,"raw_amount":raw_amount,"bonus":bonus,"hp":target.hp})
 	if target.hp == 0:
 		target.alive = false
+		target.guarding = false
 		emit("death",target.name + " 死亡",{"unit_id":target_id,"position":target.position.duplicate()})
+		if target.team == "undead":
+			var old_domination = domination
+			domination = mini(20,domination+5)
+			emit("resource","%s 魂归主宰：恢复%d支配力，当前%d/20" % [target.name,domination-old_domination,domination],
+				{"actor_id":target.id,"trait":"SOUL_RETURN","gain":domination-old_domination,"remaining":domination})
 	check_winner()
 	return events.slice(begin)
 
@@ -196,6 +235,8 @@ func attack(actor: Dictionary, target: Dictionary, reaction: bool):
 	for target_id in hits:
 		if is_terminal():
 			break
+		if reaction and unit(target_id).team == actor.team:
+			continue
 		apply_damage(actor.id,target_id,rng.randi_range(int(d.damage_min),int(d.damage_max)),"借机攻击" if reaction else d.label)
 
 func advance_human():
@@ -222,8 +263,15 @@ func execute_action(action: Dictionary) -> Array:
 		human_index = 0
 		for u in humans():
 			u.ap = 6
+			if u.guarding:
+				u.guarding = false
+				emit("guard_expired",u.name + " 守护结束",{"actor_id":u.id})
 		emit("turn","人类回合 · 各单位恢复至 6 AP")
 		advance_human()
+	elif kind == "GUARD":
+		spend(actor,int(definitions[actor.archetype].guard_cost))
+		actor.guarding = true
+		emit("guard",actor.name + " 开启守护，持续至下次人类回合开始",{"actor_id":actor.id})
 	elif kind == "END_UNIT":
 		emit("end_unit",actor.name + " 结束行动")
 		human_index += 1
@@ -241,8 +289,9 @@ func execute_action(action: Dictionary) -> Array:
 			if not actor.alive or is_terminal():
 				break
 			var old = actor.position.duplicate()
+			var cost = Terrain.step_cost(heights,pos(actor),cell,int(definitions[actor.archetype].move_cost))
 			actor.position = Hex.encode(cell)
-			spend(actor,int(definitions[actor.archetype].move_cost))
+			spend(actor,cost)
 			emit("move",actor.name + " 移至 " + str(cell),{"actor_id":actor.id,"from":old,"to":actor.position.duplicate()})
 	elif kind == "TELEPORT":
 		spend(actor,int(definitions[actor.archetype].teleport_cost))
@@ -264,12 +313,12 @@ func get_observation(_team: String = "") -> Dictionary:
 			zones[u.id] = []
 			if radius > 0:
 				for cell in Hex.cells():
-					if cell != pos(u) and Hex.distance(pos(u),cell) <= radius:
+					if cell != pos(u) and Hex.distance(pos(u),cell) <= radius and Terrain.attack_height_allowed(heights,pos(u),cell,definitions[u.archetype].kind):
 						zones[u.id].append(Hex.encode(cell))
 		if can_act(u):
 			legal_actions[u.id] = enumerate_legal_actions(u.id)
-	return {"round":round_number,"phase":"finished" if is_terminal() else "battle","current_faction":faction,
+	return {"level_id":level_id,"level_name":level_name,"round":round_number,"phase":"finished" if is_terminal() else "battle","current_faction":faction,
 		"undead_domination":domination,"domination_cap":20,"domination_regen":10,
-		"board":{"width":20,"height":10,"hex_layout":setup.layout},"units":units.duplicate(true),
+		"board":{"width":20,"height":10,"hex_layout":setup.layout,"heights":heights.duplicate(true)},"units":units.duplicate(true),
 		"definitions":definitions.duplicate(true),"zones":zones,"legal_actions":legal_actions,"winner":winner,"active_human":active_human(),
 		"human_index":human_index,"rng_seed":initial_seed,"rng_state":str(rng.state),"action_history":history.duplicate(true)}

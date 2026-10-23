@@ -1,0 +1,112 @@
+"""Export a compact unit sheet with actions on each unit's own row."""
+import json
+from pathlib import Path
+
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.utils import get_column_letter
+
+ROOT = Path(__file__).resolve().parents[1]
+DATA = ROOT / "necromancer-test" / "data"
+definitions = json.loads((DATA / "units.json").read_text(encoding="utf-8"))
+members = json.loads((DATA / "battle_setup.json").read_text(encoding="utf-8"))["units"]
+output = ROOT / "单位数据表.xlsx"
+book = Workbook()
+book.remove(book.active)
+headers = ["单位", "生命值（HP）", "行动资源", "移动", "攻击", "特殊动作", "借机攻击", "特性"]
+
+for team, title in [("undead", "己方"), ("human", "敌人")]:
+    sheet = book.create_sheet(title)
+    sheet.append(headers)
+    seen = set()
+    for member in members:
+        if member["team"] != team or member["archetype"] in seen:
+            continue
+        seen.add(member["archetype"])
+        d = definitions[member["archetype"]]
+        resource = "支配力" if team == "undead" else "AP"
+        damage = f'{d["damage_min"]}–{d["damage_max"]}'
+        movement = f'同高每格{d["move_cost"]}{resource}；上升或下降1级额外消耗1{resource}（当前每格2点）。\n高度差超过1级不可步行跨越；可连续移动，不能穿越其他单位。'
+        attack = f'{d["label"]}：消耗{d["cost"]}{resource}，攻击{d["range"]}格范围内的指定目标。\n'
+        if d["target_shape"] == "spear":
+            attack += (
+                f'目标在六条直线方向上：对该方向前1～2格内的所有单位造成范围伤害，每个目标独立受到{damage}伤害。\n'
+                f'目标不在直线上：仅对指定目标造成{damage}伤害。\n可伤害友军。'
+            )
+        else:
+            attack += f'造成{damage}单体伤害，可指定友军。'
+            if member["archetype"] == "archer":
+                attack += "\n中间单位不阻挡，也不会受伤。"
+        if d["kind"] != "SHOOT":
+            attack += "\n仅能命中与攻击者高度差≤1级的单位；范围攻击逐个目标检查高度。"
+        special = "无"
+        if "teleport_range" in d:
+            special = (
+                f'瞬移：消耗{d["teleport_cost"]}{resource}，到达自身{d["teleport_range"]}格范围内任一空格。\n'
+                '可越过单位，不触发借机攻击；之后仍可继续行动。'
+            )
+        if "guard_cost" in d:
+            special = (
+                f'守护：消耗{d["guard_cost"]}AP，持续至下次人类回合开始。\n'
+                '相邻6格友军所受伤害全部转移到自己；友军微颤后闪白光、不扣血。\n'
+                '双方都开启守护的盾兵互不保护；只开一方可保护未开启的一方。\n'
+                '同一友军被多人守护时按部署顺序转移一次。范围伤害命中自己及友军时，两份都承担。'
+            )
+        reaction = "无（没有控制区）"
+        if d["zoc"]:
+            reaction = (
+                f'控制区：{d["zoc"]}格。敌人从区域内继续移动或离开时，在离开旧格前触发；走入不触发。\n'
+                f'不消耗资源，次数不限；每个敌方目标受到{damage}伤害，不伤害友军。'
+            )
+            if d["target_shape"] == "spear":
+                reaction += "\n沿用穿刺形状：直线前1～2格范围伤害，非直线单体；跳过友军，不阻挡后方敌人受伤。"
+            reaction += "\n只覆盖和命中与攻击者高度差≤1级的格子及单位。"
+        sheet.append([
+            d["name"], d["hp"],
+            "共享支配力" if team == "undead" else "独立AP：每回合6点",
+            movement, attack, special, reaction,
+            "魂归主宰：死亡时恢复5点共享支配力，不超过20点上限。" if team == "undead" else "众志成城：每有1名相邻六格内的存活人类友军，造成的伤害+1。普通攻击、借机攻击、范围攻击每个目标均适用；守护转移不重复加成。不再减免受到的伤害。",
+        ])
+    table = Table(displayName="AlliedUnits" if team == "undead" else "EnemyUnits",
+                  ref=f"A1:H{sheet.max_row}")
+    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+    sheet.add_table(table)
+    sheet.sheet_view.showGridLines = False
+    sheet.sheet_view.zoomScale = 80
+    sheet.freeze_panes = "D2"
+    sheet.row_dimensions[1].height = 32
+    for cell in sheet[1]:
+        cell.font = Font(name="微软雅黑", bold=True, color="FFFFFF", size=12)
+        cell.fill = PatternFill("solid", fgColor="243E50")
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    for row in sheet.iter_rows(min_row=2):
+        sheet.row_dimensions[row[0].row].height = 220 if row[0].value == "盾兵" else 160
+        for cell in row:
+            cell.font = Font(name="微软雅黑", size=11, color="243746")
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+        row[1].alignment = Alignment(horizontal="center", vertical="top")
+    for index, width in enumerate([16, 17, 25, 33, 63, 44, 63, 44], 1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A3
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 1
+    sheet.print_area = sheet.dimensions
+    sheet.print_title_rows = "1:1"
+
+book.save(output)
+checked = load_workbook(output)
+assert checked.sheetnames == ["己方", "敌人"]
+for sheet in checked:
+    assert sheet.max_row == (3 if sheet.title == "己方" else 4) and sheet.max_column == 8
+    assert [cell.value for cell in sheet[1]] == headers
+assert all(checked["己方"].cell(row, 3).value == "共享支配力" for row in range(2, 4))
+assert [checked["己方"].cell(row, 2).value for row in range(2, 4)] == [15, 8]
+assert "消耗6支配力" in checked["己方"]["F2"].value
+assert "范围伤害" in checked["敌人"]["E2"].value
+assert checked["敌人"]["B4"].value == 20
+assert "消耗3AP" in checked["敌人"]["F4"].value
+assert all("命中率" not in str(cell.value) for sheet in checked for row in sheet for cell in row)
+print("Workbook updated and verified: two sheets; unit actions inline; no stage, position or detail sections.")

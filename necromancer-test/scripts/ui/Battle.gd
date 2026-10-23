@@ -4,6 +4,8 @@ const Rules = preload("res://scripts/core/BattleEngine.gd")
 const Hex = preload("res://scripts/core/HexGrid.gd")
 const Board = preload("res://scripts/ui/HexBoardView.gd")
 const AI = preload("res://scripts/ai/AIController.gd")
+const AI_MOVE_DELAY = 0.10
+const AI_ACTION_DELAY = 0.38
 var engine = Rules.new()
 var ai = AI.new()
 var board: Node2D
@@ -23,6 +25,8 @@ var ai_delay = 0.0
 var ai_calls = 0
 var font: SystemFont
 var hint: Label
+var current_level = 1
+var level_menu: MenuButton
 
 func _ready():
 	DisplayServer.window_set_title("亡灵法师战棋 · 单场战斗 MVP")
@@ -44,6 +48,19 @@ func _ready():
 	root.theme = theme
 	canvas.add_child(root)
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	level_menu = MenuButton.new()
+	root.add_child(level_menu)
+	level_menu.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	level_menu.offset_left = -105
+	level_menu.offset_right = 105
+	level_menu.offset_top = 16
+	level_menu.offset_bottom = 58
+	level_menu.get_popup().add_radio_check_item("第一关",1)
+	level_menu.get_popup().add_radio_check_item("第二关",2)
+	level_menu.get_popup().add_radio_check_item("第三关",3)
+	level_menu.get_popup().add_separator()
+	level_menu.get_popup().add_item("重新开始",100)
+	level_menu.get_popup().id_pressed.connect(select_level)
 	var log_panel = panel(root,Vector2(16,16),Vector2(310,305))
 	var log_box = VBoxContainer.new()
 	log_panel.add_child(log_box)
@@ -82,13 +99,14 @@ func _ready():
 	end_button = Button.new()
 	end_button.text = "结束亡灵回合"
 	end_button.pressed.connect(func(): perform({"kind":"END_TURN"}))
-	top_box.add_child(end_button)
-	var restart = Button.new()
-	restart.text = "重新开始"
-	restart.pressed.connect(restart_battle)
-	top_box.add_child(restart)
+	root.add_child(end_button)
+	end_button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	end_button.offset_left = -236
+	end_button.offset_right = -16
+	end_button.offset_top = -76
+	end_button.offset_bottom = -16
 	hint = Label.new()
-	hint.text = "左键选中 · 右键移动\n数字键按动作栏顺序选择动作\n左键选目标 · Esc取消\nWASD / 中键拖动平移视角"
+	hint.text = "左键选中 · 右键移动\n数字键按动作栏顺序选择动作\n左键选目标 · Esc取消\nWASD / 中键拖动平移视角\n同高1点 · 上下台阶2点 · 落差>1不可走"
 	top_box.add_child(hint)
 	result_panel = panel(root,Vector2.ZERO,Vector2(350,150))
 	result_panel.set_anchors_preset(Control.PRESET_CENTER)
@@ -102,9 +120,9 @@ func _ready():
 	result_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	result_label.add_theme_font_size_override("font_size",28)
 	result_box.add_child(result_label)
-	var again = Button.new()
-	again.text = "重新开始战斗"
-	again.pressed.connect(restart_battle)
+	var again = Label.new()
+	again.text = "顶部菜单可重新开始或切换关卡"
+	again.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	result_box.add_child(again)
 	append_log("第 1 轮 · 亡灵先手 · 支配力 20/20")
 	refresh()
@@ -146,13 +164,18 @@ func refresh():
 	board.targeting = mode
 	board.highlighted = []
 	board.danger_cells = []
+	board.danger_zones = []
 	if not u.is_empty() and u.team == "undead" and observation.current_faction == "undead" and observation.winner == "" and mode in ["DEFAULT","MOVE"]:
 		for enemy in observation.units:
 			if enemy.alive and enemy.team != u.team:
+				var region = [Hex.decode(enemy.position)]
 				for encoded_cell in observation.zones.get(enemy.id,[]):
 					var cell = Hex.decode(encoded_cell)
+					region.append(cell)
 					if cell not in board.danger_cells:
 						board.danger_cells.append(cell)
+				if region.size() > 1:
+					board.danger_zones.append({"owner_id":enemy.id,"center":Hex.decode(enemy.position),"cells":region})
 	var wanted = "MOVE" if mode == "DEFAULT" else mode
 	for action in legal:
 		if action.kind != wanted:
@@ -164,9 +187,14 @@ func refresh():
 				if target.id == action.target_unit_id:
 					board.highlighted.append(Hex.decode(target.position))
 	board.queue_redraw()
-	status.text = "第 %d 轮 · %s\n支配力 %d / 20\n人类进度 %d / 3" % [observation.round,
+	level_menu.text = "菜单 · %s ▾" % observation.level_name
+	for index in level_menu.get_popup().item_count:
+		if level_menu.get_popup().is_item_radio_checkable(index):
+			level_menu.get_popup().set_item_checked(index,level_menu.get_popup().get_item_id(index) == current_level)
+	var human_total = observation.units.filter(func(unit): return unit.team == "human").size()
+	status.text = "第 %d 轮 · %s\n支配力 %d / 20\n人类进度 %d / %d" % [observation.round,
 		"亡灵回合" if observation.current_faction == "undead" else "人类回合",
-		observation.undead_domination,mini(3,observation.human_index)]
+		observation.undead_domination,mini(human_total,observation.human_index),human_total]
 	end_button.disabled = observation.current_faction != "undead" or observation.winner != "" or board.is_playing()
 	for child in actions.get_children():
 		actions.remove_child(child)
@@ -177,10 +205,15 @@ func refresh():
 		var d = observation.definitions[u.archetype]
 		var resource_text = "全队支配力 %d/20" % observation.undead_domination if u.team == "undead" else "AP %d/6" % u.ap
 		details.text = "%s · %s\n阵营：%s\nHP %d / %d\n%s" % [u.name,d.role,"亡灵" if u.team == "undead" else "人类",u.hp,u.max_hp,resource_text]
-		add_action("MOVE","移动1格：%d %s / 格" % [d.move_cost,"支配力" if u.team == "undead" else "AP"])
+		details.text += "\n魂归主宰：死亡恢复5支配力" if u.team == "undead" else "\n众志成城：每相邻人类友军伤害+1"
+		if u.get("guarding",false):
+			details.text += "\n守护中：至下次人类回合开始"
+		add_action("MOVE","移动：同高%d %s · 跨级+1" % [d.move_cost,"支配力" if u.team == "undead" else "AP"])
 		add_action(d.kind,"%s：%d点 · 范围%d · 伤害%d–%d" % [d.label,d.cost,d.range,d.damage_min,d.damage_max])
 		if d.has("teleport_range"):
 			add_action("TELEPORT","瞬移：%d支配力 · 范围%d" % [d.teleport_cost,d.teleport_range])
+		if d.has("guard_cost"):
+			add_action("GUARD","守护：%d AP · 相邻6格 · 1回合" % d.guard_cost)
 		var cancel = Button.new()
 		cancel.text = "[%d] 取消" % (actions.get_child_count() + 1)
 		cancel.pressed.connect(func(): mode = "DEFAULT"; refresh())
@@ -205,7 +238,12 @@ func add_action(kind: String, label: String):
 			reason = "（敌方单位）"
 	button.text = "[%d] %s" % [actions.get_child_count() + 1,label] + ("\n" + reason if reason != "" else "")
 	button.disabled = not available or observation.current_faction != "undead" or board.is_playing()
-	button.pressed.connect(func(): mode = kind; refresh())
+	button.pressed.connect(func():
+		if kind == "GUARD":
+			perform({"actor_id":selected,"kind":"GUARD"})
+		else:
+			mode = kind
+			refresh())
 	actions.add_child(button)
 
 func perform(action: Dictionary):
@@ -222,14 +260,23 @@ func perform(action: Dictionary):
 		ai_calls = 0
 	refresh()
 
+func select_level(id: int):
+	if id in [1,2,3]:
+		current_level = id
+	elif id != 100:
+		return
+	level_menu.get_popup().hide()
+	restart_battle()
+
 func restart_battle():
 	board.stop_playback()
-	engine = Rules.new()
+	engine = Rules.new(-1,current_level)
 	selected = ""
 	mode = "DEFAULT"
 	ai_calls = 0
 	ai_delay = 0.0
 	log_view.clear()
+	append_log(engine.level_name)
 	append_log("第 1 轮 · 亡灵先手 · 支配力 20/20")
 	refresh()
 
@@ -249,13 +296,13 @@ func _process(delta: float):
 	ai_delay -= delta
 	if ai_delay > 0:
 		return
-	ai_delay = 0.38
 	var actor_id = observation.active_human
 	var choices = engine.enumerate_legal_actions(actor_id)
 	var action = ai.choose_action(observation,choices)
 	ai_calls += 1
 	if ai_calls > 60 or action.is_empty() or not engine.validate_action(action).valid:
 		action = {"actor_id":actor_id,"kind":"END_UNIT"}
+	ai_delay = AI_MOVE_DELAY if action.kind == "MOVE" else AI_ACTION_DELAY
 	append_log("AI 决策：%s · %s" % [actor_id,action.kind])
 	var old_faction = observation.current_faction
 	var events = engine.execute_action(action)
@@ -302,7 +349,7 @@ func _unhandled_input(event: InputEvent):
 		return
 	if observation.winner != "" or observation.current_faction != "undead":
 		return
-	var cell = Hex.at_point(board.get_global_transform_with_canvas().affine_inverse() * event.position)
+	var cell = board.cell_at_point(board.get_global_transform_with_canvas().affine_inverse() * event.position)
 	if not Hex.inside(cell):
 		return
 	if event.button_index == MOUSE_BUTTON_RIGHT:

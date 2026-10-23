@@ -1,0 +1,41 @@
+{
+    "1":  {
+              "name":  "第一关",
+              "unit_ids":  [
+                               "vampire",
+                               "zombie_a",
+                               "zombie_b",
+                               "spear_a",
+                               "spear_b",
+                               "archer"
+                           ]
+          },
+    "2":  {
+              "name":  "第二关",
+              "unit_ids":  [
+                               "vampire",
+                               "zombie_a",
+                               "zombie_b",
+                               "spear_a",
+                               "spear_b",
+                               "shield"
+                           ]
+          },
+    "3":  {
+              "name":  "第三关",
+              "unit_ids":  [
+                               "vampire",
+                               "zombie_a",
+                               "zombie_b",
+                               "spear_a",
+                               "archer",
+                               "shield"
+                           ],
+              "offset_overrides":  {
+                                       "shield":  [
+                                                      17,
+                                                      5
+                                                  ]
+                                   }
+          }
+}

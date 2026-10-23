@@ -50,6 +50,8 @@ func run():
 	var screen_point = scene.board.to_global(hex.center(unit_cell))
 	check(scene.status.get_global_rect().position.x > 1000,"status anchored at right")
 	check(scene.details.get_global_rect().position.y > 400,"details anchored at bottom")
+	var end_rect = scene.end_button.get_global_rect()
+	check(end_rect.position.x > 1200 and end_rect.position.y > 800,"end turn anchored bottom right")
 	await click(screen_point,MOUSE_BUTTON_LEFT)
 	check(scene.selected == "zombie_a","left click selects unit")
 	check(not scene.board.highlighted.is_empty(),"selection displays reachable cells")
@@ -144,8 +146,107 @@ func run():
 	scene.refresh()
 	scene.perform({"actor_id":"vampire","kind":"MELEE_ATTACK","target_unit_id":"zombie_b"})
 	check(scene.board.is_playing(),"next attack can animate")
+	scene.level_menu.get_popup().id_pressed.emit(2)
+	check(scene.current_level == 2 and scene.engine.units.size() == 6,"menu selects second level")
+	check(scene.engine.humans().size() == 3 and scene.engine.unit("archer").is_empty() and scene.engine.unit("shield").hp == 20,"second level has two spearmen and shieldman")
+	check(not scene.board.is_playing() and scene.engine.domination == 20,"level switch resets animation and resources")
+	check(scene.status.text.contains("/ 3"),"second level progress uses three enemies")
+	check(scene.level_menu.text.contains("第二关"),"menu shows current level")
+	scene.engine.unit("vampire").position = [2,3]
+	scene.engine.unit("spear_a").position = [3,3]
+	scene.engine.unit("shield").position = [4,3]
+	scene.engine.unit("shield").guarding = true
+	scene.selected = ""
+	scene.refresh()
+	check(scene.board.guard_zones().size() == 1,"guard outline visible without selection")
+	var guard_zone = scene.board.guard_zones()[0]
+	check(guard_zone.cells.size() == 7 and scene.board.zone_edges(guard_zone.cells).size() == 18,"guard contour encloses adjacent six cells")
+	for targeting_mode in ["MOVE","MELEE_ATTACK","TELEPORT"]:
+		scene.mode = targeting_mode
+		scene.refresh()
+		check(scene.board.guard_zones().size() == 1,"guard outline persists across targeting modes")
+	scene.mode = "DEFAULT"
+	scene.engine.faction = "human"
+	scene.refresh()
+	check(scene.board.guard_zones().size() == 1,"guard visible during AI turn")
+	scene.engine.faction = "undead"
+	scene.engine.unit("shield").guarding = false
+	scene.refresh()
+	check(scene.board.guard_zones().is_empty(),"expired guard outline disappears")
+	scene.engine.unit("shield").guarding = true
+	scene.engine.unit("shield").alive = false
+	scene.refresh()
+	check(scene.board.guard_zones().is_empty(),"dead guardian has no outline")
+	scene.engine.unit("shield").alive = true
+	scene.selected = "shield"
+	scene.refresh()
+	check(scene.details.text.contains("守护中") and scene.actions.get_child(2).text.contains("守护"),"shield details expose guard action and status")
+	scene.selected = "vampire"
+	scene.refresh()
+	scene.perform({"actor_id":"vampire","kind":"MELEE_ATTACK","target_unit_id":"spear_a"})
+	scene.board._process(0.23)
+	check(scene.board.effect.type == "protected","protected unit plays immunity animation")
+	scene.board._process(0.03)
+	check(scene.board.unit_offset("spear_a") != Vector2.ZERO,"protected unit trembles slightly")
+	scene.board._process(0.15)
+	check(scene.board.visual_unit("spear_a").hp == 10,"protected animation keeps ally HP")
+	if DisplayServer.get_name() != "headless":
+		scene.board.set_process(false)
+		await RenderingServer.frame_post_draw
+		root.get_texture().get_image().save_png("res://tests/guard_preview.png")
+		scene.board.set_process(true)
+	scene.board._process(0.2)
+	check(scene.board.effect.type == "damage" and scene.board.effect.target == "shield","guardian takes subsequent damage animation")
+	var menu_rect = scene.level_menu.get_global_rect()
+	check(absf(menu_rect.get_center().x-800) < 2 and menu_rect.position.y < 60,"menu at top center")
+	scene.engine.domination = 3
+	scene.level_menu.get_popup().id_pressed.emit(100)
+	check(scene.current_level == 2 and scene.engine.units.size() == 6 and scene.engine.domination == 20,"menu restart resets current level")
+	scene.engine.execute_action({"kind":"END_TURN"})
+	for id in ["spear_a","spear_b","shield"]:
+		scene.engine.execute_action({"actor_id":id,"kind":"END_UNIT"})
+	check(scene.engine.faction == "undead" and scene.engine.round_number == 2,"second level completes human turn after three units")
+	scene.level_menu.get_popup().id_pressed.emit(1)
+	check(scene.engine.units.size() == 6 and scene.engine.unit("archer").alive,"first level restores archer")
+	scene.level_menu.get_popup().id_pressed.emit(3)
+	check(scene.current_level == 3 and scene.engine.units.size() == 6,"third level selected from menu")
+	var occupied = {}
+	for u in scene.engine.units:
+		check(not occupied.has(str(u.position)),"third level deployment has no overlapping units")
+		occupied[str(u.position)] = true
+	check(scene.engine.humans().map(func(u): return u.archetype) == ["spearman","archer","shieldman"],"third level has spear archer shield in action order")
+	check(scene.engine.unit("vampire").hp == 15 and scene.engine.unit("zombie_a").hp == 8 and scene.engine.unit("zombie_b").hp == 8,"third level preserves undead roster")
+	scene.level_menu.get_popup().id_pressed.emit(100)
+	check(scene.current_level == 3 and scene.engine.level_id == 3,"restart keeps third level")
+	scene.engine.execute_action({"kind":"END_TURN"})
+	for id in ["spear_a","archer","shield"]:
+		check(scene.engine.active_human() == id,"third level human order")
+		scene.engine.execute_action({"actor_id":id,"kind":"END_UNIT"})
+	check(scene.engine.faction == "undead","third level returns to undead turn")
+	scene.level_menu.get_popup().id_pressed.emit(1)
+	scene.restart_battle()
+	scene.perform({"kind":"END_TURN"})
+	scene.ai_delay = 0
+	scene._process(0)
+	check(scene.engine.history.back().kind == "MOVE" and is_equal_approx(scene.ai_delay,0.10),"AI walking interval is one tenth second")
 	scene.restart_battle()
 	check(not scene.board.is_playing() and scene.board.effect.is_empty(),"restart clears animation queue")
+	scene.engine.unit("spear_a").position = [10,3]
+	scene.engine.unit("spear_b").position = [9,6]
+	scene.selected = "vampire"
+	scene.refresh()
+	check(scene.board.danger_zones.size() == 2,"each spearman keeps independent boundary")
+	for zone in scene.board.danger_zones:
+		var expected = scene.engine.get_observation().zones[zone.owner_id].map(func(c): return Vector2i(int(c[0]),int(c[1])))
+		expected.append(zone.center)
+		check(zone.cells.size() == expected.size() and expected.all(func(c): return c in zone.cells),"boundary uses height-filtered zone and includes owner")
+		var perimeter = 0
+		for cell in zone.cells:
+			for direction in [Vector2i(1,0),Vector2i(1,-1),Vector2i(0,-1),Vector2i(-1,0),Vector2i(-1,1),Vector2i(0,1)]:
+				if cell+direction not in zone.cells:
+					perimeter += 1
+		check(scene.board.zone_edges(zone.cells).size() == perimeter,"height-clipped zone draws only perimeter edges")
+	check(scene.board.danger_zones[0].cells.any(func(cell): return cell in scene.board.danger_zones[1].cells),"preview includes overlapping zones")
 	await process_frame
 	if DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw

@@ -1,14 +1,78 @@
 {
-  "seed":20261021,
-  "layout":"pointy_odd_r",
-  "reaction_order":"deployment_order",
-  "spear_hit_order":"near_to_far",
-  "units":[
-    {"id":"vampire","name":"吸血鬼","archetype":"vampire","team":"undead","offset":[1,4]},
-    {"id":"zombie_a","name":"僵尸甲","archetype":"zombie","team":"undead","offset":[2,3]},
-    {"id":"zombie_b","name":"僵尸乙","archetype":"zombie","team":"undead","offset":[2,6]},
-    {"id":"spear_a","name":"矛兵甲","archetype":"spearman","team":"human","offset":[17,3]},
-    {"id":"spear_b","name":"矛兵乙","archetype":"spearman","team":"human","offset":[17,6]},
-    {"id":"archer","name":"弓兵","archetype":"archer","team":"human","offset":[18,4]}
+  "seed": 20261021,
+  "layout": "pointy_odd_r",
+  "reaction_order": "deployment_order",
+  "spear_hit_order": "near_to_far",
+  "units": [
+    {
+      "id": "vampire",
+      "name": "吸血鬼",
+      "archetype": "vampire",
+      "team": "undead",
+      "offset": [
+        1,
+        4
+      ]
+    },
+    {
+      "id": "zombie_a",
+      "name": "僵尸甲",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        2,
+        3
+      ]
+    },
+    {
+      "id": "zombie_b",
+      "name": "僵尸乙",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        2,
+        6
+      ]
+    },
+    {
+      "id": "spear_a",
+      "name": "矛兵甲",
+      "archetype": "spearman",
+      "team": "human",
+      "offset": [
+        17,
+        3
+      ]
+    },
+    {
+      "id": "spear_b",
+      "name": "矛兵乙",
+      "archetype": "spearman",
+      "team": "human",
+      "offset": [
+        17,
+        6
+      ]
+    },
+    {
+      "id": "archer",
+      "name": "弓兵",
+      "archetype": "archer",
+      "team": "human",
+      "offset": [
+        18,
+        4
+      ]
+    },
+    {
+      "id": "shield",
+      "name": "盾兵",
+      "archetype": "shieldman",
+      "team": "human",
+      "offset": [
+        18,
+        4
+      ]
+    }
   ]
 }
