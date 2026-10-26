@@ -2,12 +2,16 @@ extends RefCounted
 const Hex = preload("res://scripts/core/HexGrid.gd")
 const LIFT = 16.0
 
+static func blocked(obstacles: Dictionary, cell: Vector2i) -> bool:
+	var o = Hex.to_offset(cell)
+	return bool(obstacles.get("%d,%d" % [o.x,o.y],false))
+
 static func height_at(heights: Dictionary, cell: Vector2i) -> int:
 	var o = Hex.to_offset(cell)
 	return int(heights.get("%d,%d" % [o.x,o.y],0))
 
-static func step_cost(heights: Dictionary, from: Vector2i, to: Vector2i, base: int = 1) -> int:
-	if not Hex.inside(to) or Hex.distance(from,to) != 1:
+static func step_cost(heights: Dictionary, from: Vector2i, to: Vector2i, base: int = 1, width: int = 20, height: int = 10) -> int:
+	if not Hex.inside(to,width,height) or Hex.distance(from,to) != 1:
 		return -1
 	var difference = absi(height_at(heights,from)-height_at(heights,to))
 	return -1 if difference > 1 else base + difference

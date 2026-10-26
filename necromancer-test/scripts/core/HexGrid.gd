@@ -9,14 +9,14 @@ static func from_offset(col: int, row: int) -> Vector2i:
 static func to_offset(cell: Vector2i) -> Vector2i:
 	return Vector2i(cell.x + (cell.y - (cell.y & 1)) / 2, cell.y)
 
-static func inside(cell: Vector2i) -> bool:
+static func inside(cell: Vector2i, width: int = 20, height: int = 10) -> bool:
 	var o = to_offset(cell)
-	return o.x >= 0 and o.x < 20 and o.y >= 0 and o.y < 10
+	return o.x >= 0 and o.x < width and o.y >= 0 and o.y < height
 
-static func cells() -> Array:
+static func cells(width: int = 20, height: int = 10) -> Array:
 	var result = []
-	for row in 10:
-		for col in 20:
+	for row in height:
+		for col in width:
 			result.append(from_offset(col, row))
 	return result
 

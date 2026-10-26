@@ -1,41 +1,173 @@
 {
-    "1":  {
-              "name":  "第一关",
-              "unit_ids":  [
-                               "vampire",
-                               "zombie_a",
-                               "zombie_b",
-                               "spear_a",
-                               "spear_b",
-                               "archer"
-                           ]
-          },
-    "2":  {
-              "name":  "第二关",
-              "unit_ids":  [
-                               "vampire",
-                               "zombie_a",
-                               "zombie_b",
-                               "spear_a",
-                               "spear_b",
-                               "shield"
-                           ]
-          },
-    "3":  {
-              "name":  "第三关",
-              "unit_ids":  [
-                               "vampire",
-                               "zombie_a",
-                               "zombie_b",
-                               "spear_a",
-                               "archer",
-                               "shield"
-                           ],
-              "offset_overrides":  {
-                                       "shield":  [
-                                                      17,
-                                                      5
-                                                  ]
-                                   }
-          }
+  "1": {
+    "name": "第一关",
+    "unit_ids": [
+      "vampire",
+      "zombie_a",
+      "zombie_b",
+      "spear_a",
+      "spear_b",
+      "archer"
+    ],
+    "terrain": "res://data/terrain_flat.json"
+  },
+  "2": {
+    "name": "第二关",
+    "unit_ids": [
+      "vampire",
+      "zombie_a",
+      "zombie_b",
+      "spear_a",
+      "spear_b",
+      "shield"
+    ],
+    "terrain": "res://data/terrain_flat.json"
+  },
+  "3": {
+    "name": "第三关",
+    "unit_ids": [
+      "vampire",
+      "zombie_a",
+      "zombie_b",
+      "spear_a",
+      "archer",
+      "shield"
+    ],
+    "offset_overrides": {
+      "shield": [
+        17,
+        5
+      ]
+    },
+    "terrain": "res://data/terrain_flat.json"
+  },
+  "4": {
+    "name": "第四关·山脉",
+    "unit_ids": [
+      "vampire",
+      "zombie_a",
+      "zombie_b",
+      "spear_a",
+      "spear_b",
+      "archer"
+    ],
+    "terrain": "res://data/terrain_mountains.json"
+  },
+  "5": {
+    "name": "第五关·峡谷",
+    "unit_ids": [
+      "vampire",
+      "zombie_a",
+      "zombie_b",
+      "spear_a",
+      "spear_b",
+      "archer"
+    ],
+    "terrain": "res://data/terrain_canyon.json"
+  },
+  "6": {
+    "name": "第六关·峡谷",
+    "unit_ids": [
+      "vampire",
+      "zombie_a",
+      "zombie_b",
+      "spear_a",
+      "shield",
+      "shield_b"
+    ],
+    "terrain": "res://data/terrain_canyon.json"
+  },
+  "7": {
+    "name": "第七关·大平原",
+    "width": 20,
+    "height": 10,
+    "terrain": "res://data/terrain_flat.json",
+    "unit_ids": [
+      "vampire",
+      "vampire_b",
+      "zombie_a",
+      "zombie_b",
+      "zombie_c",
+      "zombie_d",
+      "zombie_e",
+      "zombie_f",
+      "spear_a",
+      "spear_b",
+      "spear_c",
+      "spear_d",
+      "archer",
+      "archer_b",
+      "shield",
+      "shield_b"
+    ],
+    "offset_overrides": {
+      "vampire": [
+        1,
+        3
+      ],
+      "vampire_b": [
+        1,
+        6
+      ],
+      "zombie_a": [
+        2,
+        1
+      ],
+      "zombie_b": [
+        2,
+        2
+      ],
+      "zombie_c": [
+        2,
+        3
+      ],
+      "zombie_d": [
+        2,
+        5
+      ],
+      "zombie_e": [
+        2,
+        6
+      ],
+      "zombie_f": [
+        2,
+        8
+      ],
+      "spear_a": [
+        17,
+        1
+      ],
+      "spear_b": [
+        17,
+        3
+      ],
+      "spear_c": [
+        17,
+        5
+      ],
+      "spear_d": [
+        17,
+        7
+      ],
+      "archer": [
+        18,
+        3
+      ],
+      "archer_b": [
+        18,
+        6
+      ],
+      "shield": [
+        17,
+        2
+      ],
+      "shield_b": [
+        17,
+        6
+      ]
+    },
+    "initial_domination": 60,
+    "domination_cap": 60,
+    "domination_regen": 30
+  }
 }

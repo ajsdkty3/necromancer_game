@@ -20,7 +20,7 @@ func top_polygon(cell: Vector2i) -> PackedVector2Array:
 	return points
 
 func cell_at_point(point: Vector2) -> Vector2i:
-	var cells = Hex.cells()
+	var cells = board_cells()
 	cells.reverse()
 	for cell in cells:
 		if Geometry2D.is_point_in_polygon(point,top_polygon(cell)):
@@ -63,6 +63,36 @@ var pending_events: Array = []
 var effect: Dictionary = {}
 var effect_time = 0.0
 var effect_duration = 0.0
+const MOVE_STEP_DURATION = 0.10
+const SHOT_WINDUP = 0.08
+const SHOT_FLIGHT = 0.20
+
+func is_ranged_shot() -> bool:
+	if effect.get("type","") != "attack":
+		return false
+	var actor = visual_unit(effect.actor_id)
+	return not actor.is_empty() and observation.definitions[actor.archetype].kind == "SHOOT"
+
+func projectile_state() -> Dictionary:
+	if not is_ranged_shot() or effect_time < SHOT_WINDUP:
+		return {}
+	var start = surface_center(Hex.decode(visual_unit(effect.actor_id).position))
+	var finish = surface_center(Hex.decode(visual_unit(effect.target_id).position))
+	var progress = clampf((effect_time-SHOT_WINDUP)/SHOT_FLIGHT,0.0,1.0)
+	return {"head":start.lerp(finish,progress),"direction":(finish-start).normalized()}
+
+func draw_projectile():
+	var shot = projectile_state()
+	if shot.is_empty():
+		return
+	var head: Vector2 = shot.head
+	var direction: Vector2 = shot.direction
+	var side = direction.orthogonal()
+	draw_line(head-direction*38,head,Color(1.0,0.85,0.45,0.20),5.0,true)
+	draw_line(head-direction*24,head,Color("#ffe6a0"),2.0,true)
+	draw_colored_polygon(PackedVector2Array([head+direction*5,head-direction*5+side*4,head-direction*5-side*4]),Color("#ffffff"))
+	draw_line(head-direction*23,head-direction*29+side*4,Color("#d7c5a0"),2.0,true)
+	draw_line(head-direction*23,head-direction*29-side*4,Color("#d7c5a0"),2.0,true)
 
 func guard_zones() -> Array:
 	var result = []
@@ -77,7 +107,7 @@ func guard_zones() -> Array:
 			continue
 		var center = Hex.decode(u.position)
 		var cells = []
-		for cell in Hex.cells():
+		for cell in board_cells():
 			if Hex.distance(center,cell) <= radius:
 				cells.append(cell)
 		result.append({"owner_id":u.id,"center":center,"cells":cells})
@@ -106,7 +136,7 @@ func stop_playback():
 
 func play_events(events: Array, before: Dictionary):
 	stop_playback()
-	if not events.any(func(e): return e.type in ["attack","reaction","damage","protected","guard"]):
+	if not events.any(func(e): return e.type in ["attack","reaction","damage","protected","guard"] or (e.type == "move" and before.units.any(func(u): return u.id == e.actor_id and u.team == "undead"))):
 		return
 	visual_units = before.units.duplicate(true)
 	pending_events = events.duplicate(true)
@@ -123,7 +153,14 @@ func advance_effect():
 	while not pending_events.is_empty():
 		var event = pending_events.pop_front()
 		match event.type:
-			"move","teleport":
+			"move":
+				if visual_unit(event.actor_id).team == "undead":
+					effect = event
+					effect_time = 0.0
+					effect_duration = MOVE_STEP_DURATION
+					return
+				visual_unit(event.actor_id).position = event.to.duplicate()
+			"teleport":
 				visual_unit(event.actor_id).position = event.to.duplicate()
 			"death":
 				visual_unit(event.unit_id).alive = false
@@ -134,6 +171,8 @@ func advance_effect():
 				effect = event
 				effect_time = 0.0
 				effect_duration = 0.24 if event.type == "damage" else 0.22
+				if is_ranged_shot():
+					effect_duration = SHOT_WINDUP + SHOT_FLIGHT
 				if event.type == "damage":
 					visual_unit(event.target).hp = event.hp
 				elif event.type == "protected":
@@ -149,14 +188,21 @@ func _process(delta: float):
 	if not is_playing():
 		return
 	effect_time += delta
-	if effect_time >= effect_duration:
+	while is_playing() and effect_time >= effect_duration:
+		var remainder = effect_time-effect_duration
+		if effect.type == "move":
+			visual_unit(effect.actor_id).position = effect.to.duplicate()
 		advance_effect()
+		if is_playing():
+			effect_time = remainder
 	queue_redraw()
 
 func unit_offset(id: String) -> Vector2:
 	if effect.is_empty():
 		return Vector2.ZERO
 	var t = clampf(effect_time / effect_duration,0.0,1.0)
+	if effect.type == "move" and effect.actor_id == id:
+		return (surface_center(Hex.decode(effect.to))-surface_center(Hex.decode(effect.from)))*t
 	if effect.type == "protected" and effect.target == id:
 		return Vector2(sin(t*TAU*3.0)*2.5*(1.0-t),0) if t < 0.4 else Vector2.ZERO
 	if effect.type == "damage" and effect.target == id:
@@ -165,6 +211,9 @@ func unit_offset(id: String) -> Vector2:
 		var actor = visual_unit(id)
 		var target = visual_unit(effect.target_id)
 		var direction = (surface_center(Hex.decode(target.position))-surface_center(Hex.decode(actor.position))).normalized()
+		if is_ranged_shot():
+			# Brief draw/recoil instead of the melee raise-and-slam.
+			return -direction*4.0*sin(t*PI)
 		var raised = Vector2(0,-10)-direction*3
 		var impact = direction*10+Vector2(0,3)
 		if t < 0.4:
@@ -177,7 +226,7 @@ func unit_offset(id: String) -> Vector2:
 func _draw():
 	if font == null:
 		font = ThemeDB.fallback_font
-	for cell in Hex.cells():
+	for cell in board_cells():
 		var center = surface_center(cell)
 		var points = top_polygon(cell)
 		var height = Terrain.height_at(terrain_heights(),cell)
@@ -191,9 +240,11 @@ func _draw():
 				draw_colored_polygon(PackedVector2Array([a,b,b+drop,a+drop]),Color("#66513b") if edge == 1 else Color("#473c30"))
 				for tier in height:
 					draw_line(a+Vector2(0,(tier+1)*Terrain.LIFT),b+Vector2(0,(tier+1)*Terrain.LIFT),Color("#302c26"),1.0,true)
-		var fill = [Color("#243b35"),Color("#526548"),Color("#7b8457")][mini(height,2)]
+		var fill = [Color("#243b35"),Color("#526548"),Color("#7b8457"),Color("#92946b"),Color("#aaa68a"),Color("#c4bfaa")][mini(height,5)]
 		if cell in highlighted:
 			fill = Color("#315965").lightened(height*0.10) if targeting in ["DEFAULT","MOVE"] else Color("#74483e").lightened(height*0.08)
+			if targeting == "TELEPORT":
+				fill = Color("#74483e")
 		elif cell in danger_cells:
 			fill = Color("#50272d")
 		draw_colored_polygon(points,fill)
@@ -205,6 +256,17 @@ func _draw():
 	draw_guard_boundaries()
 	if observation.is_empty():
 		return
+	for cell in board_cells():
+		if Terrain.blocked(observation.board.get("obstacles",{}),cell):
+			var p = surface_center(cell)
+			draw_circle(p+Vector2(0,7),24,Color(0,0,0,0.35))
+			var rock = PackedVector2Array([p+Vector2(-23,7),p+Vector2(-17,-13),p+Vector2(-2,-23),p+Vector2(17,-14),p+Vector2(24,7),p+Vector2(9,17),p+Vector2(-13,16)])
+			draw_colored_polygon(rock,Color("#696e73"))
+			draw_colored_polygon(PackedVector2Array([rock[0],rock[1],rock[2],p+Vector2(1,-2)]),Color("#9b9c94"))
+			draw_colored_polygon(PackedVector2Array([p+Vector2(1,-2),rock[3],rock[4],rock[5]]),Color("#444b52"))
+			rock.append(rock[0])
+			draw_polyline(rock,Color("#c2bca1"),1.2,true)
+			draw_string(font,p+Vector2(-14,8),"障碍",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color.WHITE)
 	for u in (visual_units if is_playing() else observation.units):
 		if not u.alive:
 			continue
@@ -236,3 +298,8 @@ func _draw():
 		var hp = "%d/%d" % [u.hp,u.max_hp]
 		width = font.get_string_size(hp,HORIZONTAL_ALIGNMENT_LEFT,-1,13).x
 		draw_string(font,p+Vector2(-width/2,17),hp,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color.WHITE)
+	draw_projectile()
+
+func board_cells() -> Array:
+	var dimensions = observation.get("board",{})
+	return Hex.cells(int(dimensions.get("width",20)),int(dimensions.get("height",10)))

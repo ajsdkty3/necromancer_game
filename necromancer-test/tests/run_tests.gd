@@ -13,6 +13,8 @@ func check(condition: bool, label: String):
 
 func arrange(placements: Dictionary):
 	var e = Rules.new(42)
+	# Hand-authored rule fixtures are independent of the demonstration map.
+	e.obstacles = {}
 	for u in e.units:
 		u.alive = placements.has(u.id)
 		if u.alive:
@@ -92,7 +94,7 @@ func test_combat():
 	check(count(events,"damage") == 1 and e.unit("spear_a").hp == 10,"archer ignores intermediate unit")
 	e = arrange({"vampire":[0,0],"zombie_a":[1,0],"archer":[15,0]})
 	events = e.execute_action({"actor_id":"vampire","kind":"MELEE_ATTACK","target_unit_id":"zombie_a"})
-	check(e.domination == 16 and e.unit("zombie_a").hp < 8,"explicit friendly attack")
+	check(e.domination == 12 and e.unit("zombie_a").hp < 8,"explicit friendly attack")
 	e = arrange({"vampire":[0,0],"archer":[1,0]})
 	e.unit("archer").hp = 1
 	events = e.execute_action({"actor_id":"vampire","kind":"MELEE_ATTACK","target_unit_id":"archer"})
@@ -121,10 +123,18 @@ func test_reactions():
 	check(count(events,"reaction") == 2,"multiple controllers")
 	e = arrange({"zombie_a":[3,3],"spear_a":[4,3]})
 	e.unit("zombie_a").hp = 100
+	var expected_reactions = 1
 	for destination in [[3,4],[3,3],[3,4]]:
 		events = e.execute_action(move("zombie_a",destination[0],destination[1]))
-		check(count(events,"reaction") == 1,"unlimited repeated reactions")
+		check(count(events,"reaction") == expected_reactions,"reaction only once before reset")
+		expected_reactions = 0
 	check(e.unit("spear_a").ap == 6,"reactions do not cost ap")
+	check(e.get_observation().zones.spear_a.is_empty(),"spent reaction hides zone")
+	e.unit("zombie_a").reaction_ready = false
+	e.execute_action({"kind":"END_TURN"})
+	check(e.unit("spear_a").reaction_ready and not e.unit("zombie_a").reaction_ready,"only humans reset at human turn start")
+	e.execute_action({"actor_id":"spear_a","kind":"END_UNIT"})
+	check(e.unit("zombie_a").reaction_ready,"undead reset at undead turn start")
 	e = arrange({"zombie_a":[4,4],"spear_a":[3,3],"zombie_b":[4,3]})
 	events = e.execute_action(move("zombie_a",5,4))
 	check(count(events,"damage") == 1 and e.unit("zombie_b").hp == 8,"off-axis reaction single target")
@@ -239,7 +249,7 @@ func test_ai_and_replay():
 		check(battle.unit(actor_id).position == stopping_position,"AI stays at firing position")
 
 func test_full_battles():
-	for configuration in [[1,1],[7,1],[42,1],[1,2],[7,2],[1,3]]:
+	for configuration in [[1,1],[7,1],[42,1],[1,2],[7,2],[1,3],[1,4],[1,5],[1,6]]:
 		var seed_value: int = configuration[0]
 		var level: int = configuration[1]
 		var e = Rules.new(seed_value,level)

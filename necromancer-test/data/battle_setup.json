@@ -73,6 +73,96 @@
         18,
         4
       ]
+    },
+    {
+      "id": "shield_b",
+      "name": "盾兵乙",
+      "archetype": "shieldman",
+      "team": "human",
+      "offset": [
+        17,
+        5
+      ]
+    },
+    {
+      "id": "vampire_b",
+      "name": "吸血鬼乙",
+      "archetype": "vampire",
+      "team": "undead",
+      "offset": [
+        1,
+        6
+      ]
+    },
+    {
+      "id": "zombie_c",
+      "name": "僵尸丙",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        2,
+        3
+      ]
+    },
+    {
+      "id": "zombie_d",
+      "name": "僵尸丁",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        2,
+        4
+      ]
+    },
+    {
+      "id": "zombie_e",
+      "name": "僵尸戊",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        2,
+        6
+      ]
+    },
+    {
+      "id": "zombie_f",
+      "name": "僵尸己",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        2,
+        8
+      ]
+    },
+    {
+      "id": "spear_c",
+      "name": "矛兵丙",
+      "archetype": "spearman",
+      "team": "human",
+      "offset": [
+        37,
+        5
+      ]
+    },
+    {
+      "id": "spear_d",
+      "name": "矛兵丁",
+      "archetype": "spearman",
+      "team": "human",
+      "offset": [
+        37,
+        7
+      ]
+    },
+    {
+      "id": "archer_b",
+      "name": "弓兵乙",
+      "archetype": "archer",
+      "team": "human",
+      "offset": [
+        38,
+        6
+      ]
     }
   ]
 }

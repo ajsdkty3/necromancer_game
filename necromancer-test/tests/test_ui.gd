@@ -40,6 +40,12 @@ func press_key(code: Key):
 func run():
 	var scene = load("res://scenes/Battle.tscn").instantiate()
 	root.add_child(scene)
+	check(scene.edge_pan_direction(Vector2(2,450),Vector2(1600,900))==Vector2.RIGHT,"left edge pans view left")
+	check(scene.edge_pan_direction(Vector2(1598,450),Vector2(1600,900))==Vector2.LEFT,"right edge pans view right")
+	check(scene.edge_pan_direction(Vector2(800,2),Vector2(1600,900))==Vector2.DOWN,"top edge pans view up")
+	check(scene.edge_pan_direction(Vector2(800,898),Vector2(1600,900))==Vector2.UP,"bottom edge pans view down")
+	check(scene.edge_pan_direction(Vector2(800,450),Vector2(1600,900))==Vector2.ZERO,"center stops edge pan")
+	check(scene.edge_pan_direction(Vector2(-2,450),Vector2(1600,900))==Vector2.ZERO,"outside window stops edge pan")
 	await process_frame
 	await process_frame
 	# Input coordinates use the viewport; bypass window stretch by fixing the test viewport.
@@ -54,6 +60,14 @@ func run():
 	check(end_rect.position.x > 1200 and end_rect.position.y > 800,"end turn anchored bottom right")
 	await click(screen_point,MOUSE_BUTTON_LEFT)
 	check(scene.selected == "zombie_a","left click selects unit")
+	await click(screen_point,MOUSE_BUTTON_LEFT)
+	check(scene.selected == "" and scene.mode == "DEFAULT" and scene.board.highlighted.is_empty() and scene.board.danger_cells.is_empty(),"click selected ally clears selection and highlights")
+	await click(screen_point,MOUSE_BUTTON_LEFT)
+	await press_key(KEY_1)
+	var toggle_history = scene.engine.history.size()
+	await click(screen_point,MOUSE_BUTTON_LEFT)
+	check(scene.selected == "" and scene.mode == "DEFAULT" and scene.engine.history.size() == toggle_history,"click self in targeting cancels selection without action")
+	await click(screen_point,MOUSE_BUTTON_LEFT)
 	check(not scene.board.highlighted.is_empty(),"selection displays reachable cells")
 	var expected_danger = {}
 	for enemy_id in ["spear_a","spear_b"]:
@@ -67,6 +81,7 @@ func run():
 	check(scene.engine.unit("zombie_a").position == hex.encode(target),"right click moves")
 	check(scene.engine.domination == 19,"single click executes exactly once")
 	check(scene.selected == "zombie_a","selection survives movement")
+	scene.board._process(1.0)
 	scene.mode = "BITE"
 	scene.refresh()
 	check(scene.board.danger_cells.is_empty(),"attack targeting clears movement danger overlay")
@@ -88,6 +103,7 @@ func run():
 	target += Vector2i(1,0)
 	await click(scene.board.to_global(hex.center(target)),MOUSE_BUTTON_LEFT)
 	check(scene.engine.unit("zombie_a").position == hex.encode(target),"move targeting supports left click")
+	scene.board._process(1.0)
 	scene.perform({"kind":"END_TURN"})
 	var history_size = scene.engine.history.size()
 	scene.perform({"actor_id":"zombie_a","kind":"MOVE","target_cell":[0,0]})
@@ -105,8 +121,8 @@ func run():
 	check(scene.mode == "TELEPORT","keypad three selects teleport")
 	check(scene.board.danger_cells.is_empty(),"teleport does not show reaction danger")
 	check(scene.engine.domination == 20 and scene.engine.history.is_empty(),"shortcut selects without executing")
-	await press_key(KEY_4)
-	check(scene.mode == "DEFAULT","four cancels vampire targeting")
+	await press_key(KEY_5)
+	check(scene.mode == "DEFAULT","five cancels vampire targeting")
 	# The second action is enabled when a friendly target is adjacent.
 	scene.engine.unit("zombie_a").position = hex.encode(hex.decode(scene.engine.unit("vampire").position) + Vector2i(1,0))
 	scene.refresh()
@@ -223,6 +239,11 @@ func run():
 		check(scene.engine.active_human() == id,"third level human order")
 		scene.engine.execute_action({"actor_id":id,"kind":"END_UNIT"})
 	check(scene.engine.faction == "undead","third level returns to undead turn")
+	for level in [4,5,6,7]:
+		scene.level_menu.get_popup().id_pressed.emit(level)
+		check(scene.current_level==level and scene.engine.level_id==level,"new level selectable from menu")
+		scene.level_menu.get_popup().id_pressed.emit(100)
+		check(scene.engine.level_id==level and scene.engine.humans().size()==(8 if level==7 else 3),"restart preserves new level")
 	scene.level_menu.get_popup().id_pressed.emit(1)
 	scene.restart_battle()
 	scene.perform({"kind":"END_TURN"})
@@ -247,6 +268,11 @@ func run():
 					perimeter += 1
 		check(scene.board.zone_edges(zone.cells).size() == perimeter,"height-clipped zone draws only perimeter edges")
 	check(scene.board.danger_zones[0].cells.any(func(cell): return cell in scene.board.danger_zones[1].cells),"preview includes overlapping zones")
+	scene.engine.unit("spear_a").reaction_ready = false
+	scene.refresh()
+	check(scene.board.danger_zones.size() == 1 and scene.board.danger_zones[0].owner_id == "spear_b","spent unit outline disappears while other remains")
+	scene.engine.unit("spear_a").reaction_ready = true
+	scene.refresh()
 	await process_frame
 	if DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw

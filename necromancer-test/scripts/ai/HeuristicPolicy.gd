@@ -12,9 +12,12 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 		if u.id == legal_actions[0].actor_id:
 			actor = u
 	var enemies = observation.units.filter(func(u): return u.alive and u.team != actor.team)
+	if observation.has("focus_target_id"):
+		enemies = enemies.filter(func(u): return u.id==observation.focus_target_id)
 	var best = legal_actions.back()
 	var best_score = 0.0
 	var best_single_hp = -1
+	var climb_before_attack = {}
 	var start = Hex.decode(actor.position)
 	var nearest = 999
 	for enemy in enemies:
@@ -27,7 +30,7 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 		if not support_move.is_empty():
 			return support_move
 	if observation.definitions[actor.archetype].target_shape == "spear" and enemy_in_range:
-		if not has_clean_attack(observation,actor,start):
+		if not has_clean_attack(observation,actor,start) and not (legal_actions.any(func(a): return a.kind == "OVERHEAD_STRIKE") and has_clean_attack(observation,actor,start,true)):
 			var reposition = choose_spear_reposition(observation,legal_actions,actor)
 			if not reposition.is_empty():
 				return reposition
@@ -50,21 +53,36 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 		elif action.kind == "MOVE":
 			if actor.get("guarding",false):
 				continue
-			# Hold attack range even when remaining AP cannot pay for another attack.
-			if enemy_in_range:
-				continue
 			var destination = Hex.decode(action.target_cell)
+			if enemy_in_range:
+				# A short climb is useful only if it unlocks a clean overhead attack
+				# this turn. Never spend the attack budget or leave an active enemy zone.
+				if can_climb_to_attack(observation,actor,destination):
+					score = 22.0
+					if climb_before_attack.is_empty():
+						climb_before_attack = action
+				else:
+					continue
+				if score > best_score:
+					best_score = score
+					best_single_hp = -1
+					best = action
+				continue
 			var next_distance = 999
 			for enemy in enemies:
 				next_distance = mini(next_distance,Hex.distance(destination,Hex.decode(enemy.position)))
 			# One adjacent step per decision allows a fresh observation after every move.
 			if Hex.distance(start,destination) != 1:
 				continue
-			if Terrain.step_cost(observation.board.get("heights",{}),start,destination,int(observation.definitions[actor.archetype].move_cost)) < 0:
+			if Terrain.step_cost(observation.board.get("heights",{}),start,destination,int(observation.definitions[actor.archetype].move_cost),int(observation.board.width),int(observation.board.height)) < 0:
 				continue
 			if not approach.has(start) or not approach.has(destination):
 				continue
 			score = float(approach[start]-approach[destination]) * 5.0 - 0.1
+			# Prefer climbing among useful approaches; allow a lateral climb but
+			# never wander away from firing range just to accumulate elevation.
+			if approach[destination] <= approach[start]:
+				score += 3.0 * (Terrain.height_at(observation.board.get("heights",{}),destination)-Terrain.height_at(observation.board.get("heights",{}),start))
 			if guard_range > 0 and not actor.get("guarding",false):
 				for ally in observation.units:
 					if ally.alive and ally.team == actor.team and ally.id != actor.id and not ally.get("guarding",false):
@@ -72,7 +90,7 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 							score += 1.5
 			for enemy in enemies:
 				var radius = int(observation.definitions[enemy.archetype].zoc)
-				if radius > 0 and Hex.distance(start,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),start):
+				if enemy.get("reaction_ready",true) and radius > 0 and Hex.distance(start,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),start):
 					score -= 12.0
 		elif action.has("target_unit_id"):
 			var target = {}
@@ -87,6 +105,10 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 						hits = observation.units.filter(func(u): return u.alive and Hex.decode(u.position) in [start+direction,start+direction*2] and height_allowed(observation,actor,start,Hex.decode(u.position)))
 						break
 			score = 0.0
+			var multiplier = 2 if action.kind == "OVERHEAD_STRIKE" else 1
+			if multiplier == 2:
+				var heights = observation.board.get("heights",{})
+				hits = hits.filter(func(u): return Terrain.height_at(heights,start)>Terrain.height_at(heights,Hex.decode(u.position)))
 			if hits.size() == 1 and target.team != actor.team:
 				single_hp = int(target.hp)
 			for hit in hits:
@@ -96,10 +118,10 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 				if hit.team == actor.team:
 					score -= 100.0
 				else:
-					score += 20.0
-					if receiver.hp <= int(d.damage_min)+bonus:
+					score += 20.0 + (1.0 if multiplier == 2 else 0.0)
+					if receiver.hp <= (int(d.damage_min)+bonus)*multiplier:
 						score += 70.0
-					elif receiver.hp <= int(d.damage_max)+bonus:
+					elif receiver.hp <= (int(d.damage_max)+bonus)*multiplier:
 						score += 15.0
 		# Fixed damage makes kill tiers monotonic in HP; break single-hit ties by
 		# current absolute HP, never percentage. Area/friendly-fire scores stay intact.
@@ -108,18 +130,26 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 			best_score = score
 			best_single_hp = single_hp
 			best = action
+	# A feasible climb + overhead attack takes precedence over attacking now,
+	# even when the ordinary attack already has a possible/guaranteed kill bonus.
+	# Guard activation and active guardian support remain separate priorities.
+	if not climb_before_attack.is_empty() and (best.has("target_unit_id") or best.kind in ["MOVE","END_UNIT"]):
+		return climb_before_attack.duplicate(true)
 	return best.duplicate(true)
 
 # Distance to an empty firing position, including terrain costs and occupied cells.
 func approach_costs(observation: Dictionary, actor: Dictionary, enemies: Array) -> Dictionary:
 	var blocked = {}
+	for cell in Hex.cells(int(observation.board.width),int(observation.board.height)):
+		if Terrain.blocked(observation.board.get("obstacles",{}),cell):
+			blocked[cell] = true
 	for u in observation.units:
 		if u.alive and u.id != actor.id:
 			blocked[Hex.decode(u.position)] = true
 	var distances = {}
 	var queue = []
 	var radius = int(observation.definitions[actor.archetype].range)
-	for cell in Hex.cells():
+	for cell in Hex.cells(int(observation.board.width),int(observation.board.height)):
 		if not blocked.has(cell) and enemies.any(func(e): return Hex.distance(cell,Hex.decode(e.position)) <= radius and height_allowed(observation,actor,cell,Hex.decode(e.position))):
 			distances[cell] = 0
 			queue.append(cell)
@@ -129,7 +159,7 @@ func approach_costs(observation: Dictionary, actor: Dictionary, enemies: Array) 
 		head += 1
 		for direction in Hex.DIRECTIONS:
 			var next: Vector2i = cell+direction
-			var cost = Terrain.step_cost(observation.board.get("heights",{}),cell,next,int(observation.definitions[actor.archetype].move_cost))
+			var cost = Terrain.step_cost(observation.board.get("heights",{}),cell,next,int(observation.definitions[actor.archetype].move_cost),int(observation.board.width),int(observation.board.height))
 			if cost < 0 or blocked.has(next):
 				continue
 			var total = distances[cell]+cost
@@ -138,15 +168,20 @@ func approach_costs(observation: Dictionary, actor: Dictionary, enemies: Array) 
 				queue.append(next)
 	return distances
 
-func has_clean_attack(observation: Dictionary, actor: Dictionary, cell: Vector2i) -> bool:
+func has_clean_attack(observation: Dictionary, actor: Dictionary, cell: Vector2i, overhead: bool = false) -> bool:
 	var d = observation.definitions[actor.archetype]
+	var heights = observation.board.get("heights",{})
 	for enemy in observation.units:
+		if observation.has("focus_target_id") and enemy.id != observation.focus_target_id:
+			continue
 		if not enemy.alive or enemy.team == actor.team or Hex.distance(cell,Hex.decode(enemy.position)) > int(d.range) or not height_allowed(observation,actor,cell,Hex.decode(enemy.position)):
 			continue
+		if overhead and Terrain.height_at(heights,cell)<=Terrain.height_at(heights,Hex.decode(enemy.position)):
+			continue
 		var friendly_fire = false
-		for direction in Hex.DIRECTIONS:
+		for direction in (Hex.DIRECTIONS if d.target_shape == "spear" else []):
 			if Hex.decode(enemy.position) in [cell+direction,cell+direction*2]:
-				friendly_fire = observation.units.any(func(u): return u.alive and u.team == actor.team and u.id != actor.id and Hex.decode(u.position) in [cell+direction,cell+direction*2] and height_allowed(observation,actor,cell,Hex.decode(u.position)))
+				friendly_fire = observation.units.any(func(u): return u.alive and u.team == actor.team and u.id != actor.id and Hex.decode(u.position) in [cell+direction,cell+direction*2] and height_allowed(observation,actor,cell,Hex.decode(u.position)) and (not overhead or Terrain.height_at(heights,cell)>Terrain.height_at(heights,Hex.decode(u.position))))
 				break
 		if not friendly_fire:
 			return true
@@ -182,7 +217,7 @@ func choose_spear_reposition(observation: Dictionary, legal_actions: Array, acto
 		var risk = route.risk
 		for enemy in observation.units:
 			var definition = observation.definitions[enemy.archetype]
-			if enemy.alive and enemy.team != actor.team and int(definition.zoc) > 0 and Hex.distance(cell,Hex.decode(enemy.position)) <= int(definition.zoc) and height_allowed(observation,enemy,Hex.decode(enemy.position),cell):
+			if enemy.alive and enemy.get("reaction_ready",true) and enemy.team != actor.team and int(definition.zoc) > 0 and Hex.distance(cell,Hex.decode(enemy.position)) <= int(definition.zoc) and height_allowed(observation,enemy,Hex.decode(enemy.position),cell):
 				risk += int(definition.damage_max)+Traits.damage_bonus(enemy,observation.units)
 		if risk >= int(actor.hp):
 			continue
@@ -190,7 +225,7 @@ func choose_spear_reposition(observation: Dictionary, legal_actions: Array, acto
 			var next: Vector2i = cell+direction
 			if not moves.has(next):
 				continue
-			var cost = Terrain.step_cost(observation.board.get("heights",{}),cell,next,int(observation.definitions[actor.archetype].move_cost))
+			var cost = Terrain.step_cost(observation.board.get("heights",{}),cell,next,int(observation.definitions[actor.archetype].move_cost),int(observation.board.width),int(observation.board.height))
 			if cost < 0 or route.steps+cost > budget:
 				continue
 			var steps = route.steps+cost
@@ -233,13 +268,13 @@ func choose_guard_move(observation: Dictionary, legal_actions: Array, actor: Dic
 		var risk = info.risk
 		for enemy in observation.units:
 			var radius = int(observation.definitions[enemy.archetype].zoc)
-			if enemy.alive and enemy.team != actor.team and radius > 0 and Hex.distance(cell,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),cell):
+			if enemy.alive and enemy.get("reaction_ready",true) and enemy.team != actor.team and radius > 0 and Hex.distance(cell,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),cell):
 				risk += 1
 		for direction in Hex.DIRECTIONS:
 			var next: Vector2i = cell+direction
 			if not moves.has(next):
 				continue
-			var cost = Terrain.step_cost(observation.board.get("heights",{}),cell,next,int(observation.definitions[actor.archetype].move_cost))
+			var cost = Terrain.step_cost(observation.board.get("heights",{}),cell,next,int(observation.definitions[actor.archetype].move_cost),int(observation.board.width),int(observation.board.height))
 			if cost < 0 or info.steps+cost > budget:
 				continue
 			var steps = info.steps+cost
@@ -267,3 +302,21 @@ func choose_guard_move(observation: Dictionary, legal_actions: Array, actor: Dic
 
 func height_allowed(observation: Dictionary, actor: Dictionary, from: Vector2i, to: Vector2i) -> bool:
 	return Terrain.attack_height_allowed(observation.board.get("heights",{}),from,to,observation.definitions[actor.archetype].kind)
+
+func can_climb_to_attack(observation: Dictionary, actor: Dictionary, destination: Vector2i) -> bool:
+	var start = Hex.decode(actor.position)
+	var heights = observation.board.get("heights",{})
+	var d = observation.definitions[actor.archetype]
+	if Hex.distance(start,destination) != 1 or Terrain.height_at(heights,destination) <= Terrain.height_at(heights,start):
+		return false
+	var cost = Terrain.step_cost(heights,start,destination,int(d.move_cost),int(observation.board.width),int(observation.board.height))
+	if cost < 0 or int(actor.ap)-cost < int(d.cost):
+		return false
+	if has_clean_attack(observation,actor,start,true) or not has_clean_attack(observation,actor,destination,true):
+		return false
+	for enemy in observation.units:
+		if enemy.alive and enemy.team != actor.team and enemy.get("reaction_ready",true):
+			var radius = int(observation.definitions[enemy.archetype].zoc)
+			if radius > 0 and Hex.distance(start,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),start):
+				return false
+	return true

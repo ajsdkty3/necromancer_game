@@ -26,8 +26,8 @@ for team, title in [("undead", "己方"), ("human", "敌人")]:
         seen.add(member["archetype"])
         d = definitions[member["archetype"]]
         resource = "支配力" if team == "undead" else "AP"
-        damage = f'{d["damage_min"]}–{d["damage_max"]}'
-        movement = f'同高每格{d["move_cost"]}{resource}；上升或下降1级额外消耗1{resource}（当前每格2点）。\n高度差超过1级不可步行跨越；可连续移动，不能穿越其他单位。'
+        damage = str(d["damage_min"]) if d["damage_min"] == d["damage_max"] else f'{d["damage_min"]}–{d["damage_max"]}'
+        movement = f'同高每格{d["move_cost"]}{resource}；上升或下降1级额外消耗1{resource}（当前每格2点）。\n高度差超过1级不可步行跨越；可连续移动，不能穿越其他单位或障碍格。'
         attack = f'{d["label"]}：消耗{d["cost"]}{resource}，攻击{d["range"]}格范围内的指定目标。\n'
         if d["target_shape"] == "spear":
             attack += (
@@ -44,7 +44,7 @@ for team, title in [("undead", "己方"), ("human", "敌人")]:
         if "teleport_range" in d:
             special = (
                 f'瞬移：消耗{d["teleport_cost"]}{resource}，到达自身{d["teleport_range"]}格范围内任一空格。\n'
-                '可越过单位，不触发借机攻击；之后仍可继续行动。'
+                '可越过单位和障碍，但不能落在障碍格；不触发借机攻击，之后仍可继续行动。'
             )
         if "guard_cost" in d:
             special = (
@@ -53,11 +53,20 @@ for team, title in [("undead", "己方"), ("human", "敌人")]:
                 '双方都开启守护的盾兵互不保护；只开一方可保护未开启的一方。\n'
                 '同一友军被多人守护时按部署顺序转移一次。范围伤害命中自己及友军时，两份都承担。'
             )
+        overhead = (
+            f'当头猛击：消耗{d["cost"]}{resource}，目标必须比自己低，且在普通攻击范围内。'
+            + (f'基础伤害{d["damage_min"]*2}。' if d['damage_min'] == d['damage_max'] else f'基础伤害{d["damage_min"]*2}–{d["damage_max"]*2}。')
+            + ('每名相邻人类友军额外增加2伤害。' if team == 'human' else '')
+            + '守护转移不重复加成。'
+            + ('近战仅能命中低1级的目标。' if d['kind'] != 'SHOOT' else '射程内较低目标均可。')
+            + '沿用普通攻击形状和友伤规则，每个目标分别检查高度。'
+        )
+        special = overhead if special == "无" else special + '\n\n' + overhead
         reaction = "无（没有控制区）"
         if d["zoc"]:
             reaction = (
                 f'控制区：{d["zoc"]}格。敌人从区域内继续移动或离开时，在离开旧格前触发；走入不触发。\n'
-                f'不消耗资源，次数不限；每个敌方目标受到{damage}伤害，不伤害友军。'
+                f'不消耗资源，每个单位仅可触发1次，在自身所属阵营回合开始时恢复；触发后红色范围消失。每个敌方目标受到{damage}伤害，不伤害友军。'
             )
             if d["target_shape"] == "spear":
                 reaction += "\n沿用穿刺形状：直线前1～2格范围伤害，非直线单体；跳过友军，不阻挡后方敌人受伤。"
@@ -66,7 +75,7 @@ for team, title in [("undead", "己方"), ("human", "敌人")]:
             d["name"], d["hp"],
             "共享支配力" if team == "undead" else "独立AP：每回合6点",
             movement, attack, special, reaction,
-            "魂归主宰：死亡时恢复5点共享支配力，不超过20点上限。" if team == "undead" else "众志成城：每有1名相邻六格内的存活人类友军，造成的伤害+1。普通攻击、借机攻击、范围攻击每个目标均适用；守护转移不重复加成。不再减免受到的伤害。",
+            "魂归主宰：死亡时恢复5点共享支配力，不超过本关支配力上限。" if team == "undead" else "众志成城：每有1名相邻六格内的存活人类友军，造成的伤害+1。普通攻击、借机攻击、范围攻击每个目标均适用；守护转移不重复加成。不再减免受到的伤害。",
         ])
     table = Table(displayName="AlliedUnits" if team == "undead" else "EnemyUnits",
                   ref=f"A1:H{sheet.max_row}")
