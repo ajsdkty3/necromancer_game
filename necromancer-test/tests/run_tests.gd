@@ -113,7 +113,7 @@ func test_combat():
 
 func test_reactions():
 	var e = arrange({"zombie_a":[0,0],"spear_a":[3,0]})
-	var events = e.execute_action(move("zombie_a",1,0))
+	var events = e.execute_action(move("zombie_a",2,0))
 	check(count(events,"reaction") == 0,"enter zoc no reaction")
 	events = e.execute_action(move("zombie_a",0,0))
 	check(count(events,"reaction") == 1 and e.unit("spear_a").ap == 6,"leave zoc free reaction")
@@ -137,13 +137,13 @@ func test_reactions():
 	check(e.unit("zombie_a").reaction_ready,"undead reset at undead turn start")
 	e = arrange({"zombie_a":[4,4],"spear_a":[3,3],"zombie_b":[4,3]})
 	events = e.execute_action(move("zombie_a",5,4))
-	check(count(events,"damage") == 1 and e.unit("zombie_b").hp == 8,"off-axis reaction single target")
-	e = arrange({"zombie_a":[0,0],"spear_a":[3,0]})
+	check(count(events,"damage") == 0 and e.unit("zombie_b").hp == 8,"distance two off-axis cell outside reaction range")
+	e = arrange({"zombie_a":[0,0],"spear_a":[2,1]})
 	e.unit("zombie_a").hp = 1
-	events = e.execute_action(move("zombie_a",2,0))
-	check(e.unit("zombie_a").position == [1,0] and not e.unit("zombie_a").alive,"death at old cell mid path")
-	check(e.domination == 20 and count(events,"move") == 1 and count(events,"resource") == 2,"only completed step charged then death restores domination to cap")
-	check(e.occupant(Vector2i(1,0)).is_empty(),"death clears occupancy")
+	events = e.execute_action(move("zombie_a",3,0))
+	check(e.unit("zombie_a").position == [2,0] and not e.unit("zombie_a").alive,"death at old cell mid path")
+	check(e.domination == 20 and count(events,"move") == 2 and count(events,"resource") == 3,"only completed steps charged then death restores domination to cap")
+	check(e.occupant(Vector2i(2,0)).is_empty(),"death clears occupancy")
 	e = arrange({"zombie_a":[1,0],"spear_a":[0,0],"spear_b":[2,0],"vampire":[10,0]})
 	e.unit("spear_b").hp = 1
 	e.unit("zombie_a").hp = 100
@@ -152,17 +152,20 @@ func test_reactions():
 	check(count(events,"damage") == 2,"no friendly damage event from reactions")
 	e = arrange({"spear_a":[0,0],"archer":[1,0],"zombie_a":[2,0]})
 	events = e.execute_action(move("zombie_a",2,1))
-	check(count(events,"damage") == 1 and e.unit("archer").hp == 8 and e.unit("zombie_a").hp < 8,"reaction skips near ally and hits far enemy")
+	check(count(events,"damage") == 0 and e.unit("archer").hp == 8 and e.unit("zombie_a").hp == 8,"far enemy outside one-cell reaction range")
 	e = arrange({"spear_a":[0,0],"zombie_a":[1,0],"zombie_b":[2,0]})
 	events = e.execute_action(move("zombie_a",1,1))
-	check(count(events,"damage") == 2 and e.unit("zombie_a").hp < 8 and e.unit("zombie_b").hp < 8,"reaction still hits both enemies in spear area")
+	check(count(events,"damage") == 1 and e.unit("zombie_a").hp < 8 and e.unit("zombie_b").hp == 8,"reaction hits only near triggering enemy")
+	e = arrange({"spear_a":[0,0],"zombie_a":[1,0],"zombie_b":[2,0]})
+	events = e.execute_action(move("zombie_b",2,1))
+	check(count(events,"damage") == 0 and e.unit("zombie_a").hp == 8 and e.unit("zombie_b").hp == 8,"moving far enemy does not trigger reaction on near enemy")
 
 func test_pathfinding():
 	var e = arrange({"zombie_a":[0,0],"zombie_b":[1,0],"archer":[15,0]})
 	var path = e.find_path("zombie_a",Vector2i(2,0))
 	check(path.size() == 3 and not Vector2i(1,0) in path,"cannot cross friends")
 	check(not Vector2i(1,0) in e.get_reachable_cells("zombie_a"),"occupied destination not highlighted")
-	e = arrange({"zombie_a":[3,3],"spear_a":[4,1]})
+	e = arrange({"zombie_a":[3,3],"spear_a":[5,2]})
 	path = e.find_path("zombie_a",Vector2i(4,4))
 	check(path.size() == 2 and path[0] == Vector2i(3,4),"equal distance safer route")
 	var observation = e.get_observation()
@@ -190,23 +193,22 @@ func test_ai_and_replay():
 	a.faction = "human"
 	var selected = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
 	check(selected.kind != "SPEAR_THRUST","AI penalizes friendly fire")
-	check(selected.kind == "MOVE","reposition when all current attacks hit allies")
+	check(selected.kind == "MOVE","without height advantage spear repositions to avoid friendly fire")
 	a.execute_action(selected)
 	var adjusted = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
-	check(adjusted.kind == "SPEAR_THRUST","attack after repositioning")
-	var safe_hits = a.attack_targets(a.unit("spear_a"),a.unit(adjusted.target_unit_id))
-	check(safe_hits.all(func(id): return a.unit(id).team != "human"),"repositioned attack avoids friends")
+	check(adjusted.kind == "SPEAR_THRUST","ordinary attack after safe reposition")
+	check(a.unit("spear_b").hp==10,"blocked shove does not damage blocking friend")
 	# Ally stands between the rear spearman and the enemy, matching the reported case.
 	a = arrange({"spear_a":[3,3],"spear_b":[4,3],"vampire":[5,3]})
 	a.faction = "human"
 	a.unit("spear_a").ap = 3
-	check(policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a")).kind == "END_UNIT","no reposition without AP reserved for attack")
+	check(policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a")).kind == "END_UNIT","no height special or budget to reposition")
 	a.unit("spear_a").ap = 6
 	selected = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
-	check(selected.kind == "MOVE","rear spearman sidesteps blocking ally")
+	check(selected.kind == "MOVE","rear spearman repositions without height advantage")
 	a.execute_action(selected)
 	adjusted = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
-	check(adjusted.kind == "SPEAR_THRUST" and adjusted.target_unit_id == "vampire","rear spearman attacks enemy from new angle")
+	check(a.validate_action(adjusted).valid and a.unit("spear_b").hp==10,"reassess after shove without hurting friend")
 	for actor_id in ["archer","spear_a"]:
 		var targeting = arrange({actor_id:[3,3],"vampire":[4,3],"zombie_a":[3,4]})
 		targeting.faction = "human"
@@ -226,12 +228,14 @@ func test_ai_and_replay():
 	area.faction = "human"
 	area.unit("zombie_b").hp = 4
 	var area_choice = policy.choose_action(area.get_observation(),area.enumerate_legal_actions("spear_a"))
-	check(area_choice.get("target_unit_id","") in ["vampire","zombie_a"],"multi hit retains area scoring over lower HP single target")
+	check(area_choice.kind=="SPEAR_THRUST" and area_choice.target_unit_id in ["vampire","zombie_a"],"flat ground uses ordinary area attack")
 	for spec in [["archer",5,2,"SHOOT"],["spear_a",2,3,"SPEAR_THRUST"]]:
 		var actor_id: String = spec[0]
 		var radius: int = spec[1]
 		var cost: int = spec[2]
 		var battle = arrange({actor_id:[0,0],"zombie_a":[radius+1,0]})
+		# Exercise the ordinary-attack fallback with the special unavailable.
+		battle.definitions.spearman.erase("knockback_cost")
 		battle.faction = "human"
 		battle.human_index = 2 if actor_id == "archer" else 0
 		var first = policy.choose_action(battle.get_observation(),battle.enumerate_legal_actions(actor_id))

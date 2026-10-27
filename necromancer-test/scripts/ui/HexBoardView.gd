@@ -6,6 +6,14 @@ var highlighted: Array = []
 var danger_cells: Array = []
 var danger_zones: Array = []
 const ZONE_COLOR = Color("#ff354f")
+const ZONE_FILL = Color(0.72,0.08,0.15,0.28)
+
+func danger_layer_count(cell: Vector2i) -> int:
+	var count = 0
+	for zone in danger_zones:
+		if cell in zone.cells:
+			count += 1
+	return count
 
 func terrain_heights() -> Dictionary:
 	return observation.get("board",{}).get("heights",{})
@@ -20,6 +28,10 @@ func top_polygon(cell: Vector2i) -> PackedVector2Array:
 	return points
 
 func cell_at_point(point: Vector2) -> Vector2i:
+	# The subtle marker remains selectable even when terrain hides the unit.
+	for u in display_units():
+		if u.alive and point.distance_to(surface_center(Hex.decode(u.position))+unit_offset(u.id)) <= 25 and unit_is_occluded(u):
+			return Hex.decode(u.position)
 	var cells = board_cells()
 	cells.reverse()
 	for cell in cells:
@@ -154,7 +166,7 @@ func advance_effect():
 		var event = pending_events.pop_front()
 		match event.type:
 			"move":
-				if visual_unit(event.actor_id).team == "undead":
+				if visual_unit(event.actor_id).team == "undead" or event.get("forced",false):
 					effect = event
 					effect_time = 0.0
 					effect_duration = MOVE_STEP_DURATION
@@ -165,6 +177,15 @@ func advance_effect():
 			"death":
 				visual_unit(event.unit_id).alive = false
 				visual_unit(event.unit_id).guarding = false
+			"escape":
+				visual_unit(event.unit_id).alive = false
+			"flee":
+				visual_unit(event.unit_id).fleeing = true
+				visual_unit(event.unit_id).guarding = false
+			"morale","rally":
+				visual_unit(event.unit_id).morale = event.morale
+				if event.type == "rally":
+					visual_unit(event.unit_id).fleeing = false
 			"guard_expired":
 				visual_unit(event.actor_id).guarding = false
 			"attack","reaction","damage","protected","guard":
@@ -184,7 +205,14 @@ func advance_effect():
 	stop_playback()
 	playback_finished.emit()
 
+var last_hover_position = Vector2.INF
+
 func _process(delta: float):
+	if is_inside_tree():
+		var hover = get_local_mouse_position()
+		if hover != last_hover_position:
+			last_hover_position = hover
+			queue_redraw()
 	if not is_playing():
 		return
 	effect_time += delta
@@ -223,82 +251,158 @@ func unit_offset(id: String) -> Vector2:
 		return impact.lerp(Vector2.ZERO,(t-0.65)/0.35)
 	return Vector2.ZERO
 
+func display_units() -> Array:
+	return visual_units if is_playing() else observation.get("units",[])
+
+func unit_ground_position(u: Dictionary) -> Vector2:
+	var ground = Hex.center(Hex.decode(u.position))
+	if not effect.is_empty() and effect.type == "move" and effect.actor_id == u.id:
+		ground = Hex.center(Hex.decode(effect.from)).lerp(Hex.center(Hex.decode(effect.to)),clampf(effect_time/effect_duration,0.0,1.0))
+	return ground
+
+func depth_items() -> Array:
+	var items = []
+	for cell in board_cells():
+		items.append({"kind":"terrain","cell":cell,"depth":Hex.center(cell).y,"layer":0})
+	for u in display_units():
+		if u.alive:
+			items.append({"kind":"unit","unit":u,"depth":unit_ground_position(u).y,"layer":1})
+	items.sort_custom(func(a,b): return a.depth < b.depth if a.depth != b.depth else a.layer < b.layer)
+	return items
+
+func terrain_polygons(cell: Vector2i) -> Array:
+	var top = top_polygon(cell)
+	var polygons = [top]
+	var drop = Vector2(0,Terrain.height_at(terrain_heights(),cell)*Terrain.LIFT)
+	if drop.y > 0:
+		for edge in [0,1,2]:
+			polygons.append(PackedVector2Array([top[edge],top[edge+1],top[edge+1]+drop,top[edge]+drop]))
+	return polygons
+
+func unit_is_occluded(u: Dictionary) -> bool:
+	var p = surface_center(Hex.decode(u.position))+unit_offset(u.id)
+	var body = PackedVector2Array()
+	for index in 16:
+		body.append(p+Vector2.from_angle(TAU*index/16.0)*23.0)
+	var ground_y = unit_ground_position(u).y
+	for cell in board_cells():
+		if Hex.center(cell).y <= ground_y or absf(surface_center(cell).x-p.x)>Hex.SIZE+23:
+			continue
+		for polygon in terrain_polygons(cell):
+			if not Geometry2D.intersect_polygons(body,polygon).is_empty():
+				return true
+	return false
+
+func draw_occluded_marker(u: Dictionary):
+	var p = surface_center(Hex.decode(u.position))+unit_offset(u.id)
+	var color = Color("#98ead0") if u.team == "undead" else Color("#ffcc88")
+	draw_arc(p,24,0,TAU,40,Color(color,0.28),1.5,true)
+	if u.id == selected_id:
+		draw_arc(p,29,0,TAU,40,Color(Color("#fff3bd"),0.65),2.0,true)
+	if get_local_mouse_position().distance_to(p) <= 25:
+		var text = "%s  %d/%d" % [u.name,u.hp,u.max_hp]
+		var width = font.get_string_size(text,HORIZONTAL_ALIGNMENT_LEFT,-1,15).x
+		var label_position = p+Vector2(-width*0.5,-36)
+		draw_style_box(hover_label_style(),Rect2(label_position+Vector2(-5,-17),Vector2(width+10,25)))
+		draw_string(font,label_position,text,HORIZONTAL_ALIGNMENT_LEFT,-1,15,color)
+
+func hover_label_style() -> StyleBoxFlat:
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color("#132029")
+	return style
+
 func _draw():
 	if font == null:
 		font = ThemeDB.fallback_font
-	for cell in board_cells():
-		var center = surface_center(cell)
-		var points = top_polygon(cell)
-		var height = Terrain.height_at(terrain_heights(),cell)
-		# Front faces join the raised top to its base; back-to-front row drawing
-		# keeps the next row's ground in front of the cliff foot.
-		if height > 0:
-			for edge in [0,1,2]:
-				var a = points[edge]
-				var b = points[edge+1]
-				var drop = Vector2(0,height*Terrain.LIFT)
-				draw_colored_polygon(PackedVector2Array([a,b,b+drop,a+drop]),Color("#66513b") if edge == 1 else Color("#473c30"))
-				for tier in height:
-					draw_line(a+Vector2(0,(tier+1)*Terrain.LIFT),b+Vector2(0,(tier+1)*Terrain.LIFT),Color("#302c26"),1.0,true)
-		var fill = [Color("#243b35"),Color("#526548"),Color("#7b8457"),Color("#92946b"),Color("#aaa68a"),Color("#c4bfaa")][mini(height,5)]
-		if cell in highlighted:
-			fill = Color("#315965").lightened(height*0.10) if targeting in ["DEFAULT","MOVE"] else Color("#74483e").lightened(height*0.08)
-			if targeting == "TELEPORT":
-				fill = Color("#74483e")
-		elif cell in danger_cells:
-			fill = Color("#50272d")
-		draw_colored_polygon(points,fill)
-		points.append(points[0])
-		draw_polyline(points,Color("#879575") if height > 0 else Color("#47615a"),1.0,true)
-		if height > 0:
-			draw_string(font,center+Vector2(15,-16),str(height),HORIZONTAL_ALIGNMENT_LEFT,-1,11,Color("#e6e4ba"))
+	for item in depth_items():
+		if item.kind == "terrain":
+			draw_terrain_cell(item.cell)
+			if not observation.is_empty():
+				draw_obstacle(item.cell)
+		else:
+			draw_unit(item.unit)
 	draw_zone_boundaries()
 	draw_guard_boundaries()
-	if observation.is_empty():
-		return
-	for cell in board_cells():
-		if Terrain.blocked(observation.board.get("obstacles",{}),cell):
-			var p = surface_center(cell)
-			draw_circle(p+Vector2(0,7),24,Color(0,0,0,0.35))
-			var rock = PackedVector2Array([p+Vector2(-23,7),p+Vector2(-17,-13),p+Vector2(-2,-23),p+Vector2(17,-14),p+Vector2(24,7),p+Vector2(9,17),p+Vector2(-13,16)])
-			draw_colored_polygon(rock,Color("#696e73"))
-			draw_colored_polygon(PackedVector2Array([rock[0],rock[1],rock[2],p+Vector2(1,-2)]),Color("#9b9c94"))
-			draw_colored_polygon(PackedVector2Array([p+Vector2(1,-2),rock[3],rock[4],rock[5]]),Color("#444b52"))
-			rock.append(rock[0])
-			draw_polyline(rock,Color("#c2bca1"),1.2,true)
-			draw_string(font,p+Vector2(-14,8),"障碍",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color.WHITE)
-	for u in (visual_units if is_playing() else observation.units):
-		if not u.alive:
-			continue
-		var p = surface_center(Hex.decode(u.position)) + unit_offset(u.id)
-		var color = Color("#98ead0") if u.team == "undead" else Color("#ffcc88")
-		var hit = not effect.is_empty() and effect.type == "damage" and effect.target == u.id
-		var protected_hit = not effect.is_empty() and effect.type == "protected" and effect.target == u.id
-		if hit:
-			color = Color("#ff7777")
-		if u.id == selected_id:
-			draw_arc(p,29,0,TAU,32,Color("#fff3bd"),2.5,true)
-		draw_circle(p,23,Color("#702b35") if hit else Color("#132029"))
-		if u.get("guarding",false):
-			draw_arc(p,27,0,TAU,40,Color("#dceeff"),2.0,true)
-			draw_string(font,p+Vector2(-14,-31),"守护",HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#dceeff"))
-		if protected_hit:
-			var progress = clampf(effect_time/effect_duration,0.0,1.0)
-			var flash = sin(clampf((progress-0.3)/0.7,0.0,1.0)*PI)
-			draw_circle(p,25,Color(1,1,1,flash*0.85))
-			draw_arc(p,28+flash*5,0,TAU,40,Color(1,1,1,flash),3.0,true)
-			draw_string(font,p+Vector2(-14,-32),"免伤",HORIZONTAL_ALIGNMENT_LEFT,-1,14,Color.WHITE)
-		for index in danger_zones.size():
-			if danger_zones[index].owner_id == u.id:
-				draw_arc(p,25,0,TAU,40,ZONE_COLOR,2.0,true)
-		if hit:
-			draw_string(font,p+Vector2(-10,-30-effect_time*25),"-%d" % effect.amount,HORIZONTAL_ALIGNMENT_LEFT,-1,18,Color("#ffaaaa"))
-		var width = font.get_string_size(u.name,HORIZONTAL_ALIGNMENT_LEFT,-1,15).x
-		draw_string(font,p+Vector2(-width/2,-1),u.name,HORIZONTAL_ALIGNMENT_LEFT,-1,15,color)
-		var hp = "%d/%d" % [u.hp,u.max_hp]
-		width = font.get_string_size(hp,HORIZONTAL_ALIGNMENT_LEFT,-1,13).x
-		draw_string(font,p+Vector2(-width/2,17),hp,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color.WHITE)
+	for u in display_units():
+		if u.alive and unit_is_occluded(u):
+			draw_occluded_marker(u)
 	draw_projectile()
+
+func draw_terrain_cell(cell: Vector2i):
+	var center = surface_center(cell)
+	var points = top_polygon(cell)
+	var height = Terrain.height_at(terrain_heights(),cell)
+	# Front faces join the raised top to its base; back-to-front row drawing
+	# keeps the next row's ground in front of the cliff foot.
+	if height > 0:
+		for edge in [0,1,2]:
+			var a = points[edge]
+			var b = points[edge+1]
+			var drop = Vector2(0,height*Terrain.LIFT)
+			draw_colored_polygon(PackedVector2Array([a,b,b+drop,a+drop]),Color("#66513b") if edge == 1 else Color("#473c30"))
+			for tier in height:
+				draw_line(a+Vector2(0,(tier+1)*Terrain.LIFT),b+Vector2(0,(tier+1)*Terrain.LIFT),Color("#302c26"),1.0,true)
+	var fill = [Color("#243b35"),Color("#526548"),Color("#7b8457"),Color("#92946b"),Color("#aaa68a"),Color("#c4bfaa")][mini(height,5)]
+	if cell in highlighted:
+		fill = Color("#315965").lightened(height*0.10) if targeting in ["DEFAULT","MOVE"] else Color("#74483e").lightened(height*0.08)
+		if targeting == "TELEPORT":
+			fill = Color("#74483e")
+	draw_colored_polygon(points,fill)
+	# Blend once per controller, including overlaps with reachable cells.
+	# Draw on the terrain surface before units so labels remain readable.
+	for layer in danger_layer_count(cell):
+		draw_colored_polygon(points,ZONE_FILL)
+	points.append(points[0])
+	draw_polyline(points,Color("#879575") if height > 0 else Color("#47615a"),1.0,true)
+	if height > 0:
+		draw_string(font,center+Vector2(15,-16),str(height),HORIZONTAL_ALIGNMENT_LEFT,-1,11,Color("#e6e4ba"))
+
+func draw_obstacle(cell: Vector2i):
+	if Terrain.blocked(observation.board.get("obstacles",{}),cell):
+		var p = surface_center(cell)
+		draw_circle(p+Vector2(0,7),24,Color(0,0,0,0.35))
+		var rock = PackedVector2Array([p+Vector2(-23,7),p+Vector2(-17,-13),p+Vector2(-2,-23),p+Vector2(17,-14),p+Vector2(24,7),p+Vector2(9,17),p+Vector2(-13,16)])
+		draw_colored_polygon(rock,Color("#696e73"))
+		draw_colored_polygon(PackedVector2Array([rock[0],rock[1],rock[2],p+Vector2(1,-2)]),Color("#9b9c94"))
+		draw_colored_polygon(PackedVector2Array([p+Vector2(1,-2),rock[3],rock[4],rock[5]]),Color("#444b52"))
+		rock.append(rock[0])
+		draw_polyline(rock,Color("#c2bca1"),1.2,true)
+		draw_string(font,p+Vector2(-14,8),"障碍",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color.WHITE)
+
+func draw_unit(u: Dictionary):
+	var p = surface_center(Hex.decode(u.position)) + unit_offset(u.id)
+	var color = Color("#98ead0") if u.team == "undead" else Color("#ffcc88")
+	var hit = not effect.is_empty() and effect.type == "damage" and effect.target == u.id
+	var protected_hit = not effect.is_empty() and effect.type == "protected" and effect.target == u.id
+	if hit:
+		color = Color("#ff7777")
+	if u.id == selected_id:
+		draw_arc(p,29,0,TAU,32,Color("#fff3bd"),2.5,true)
+	draw_circle(p,23,unit_background(u,hit))
+	if u.get("guarding",false):
+		draw_arc(p,27,0,TAU,40,Color("#dceeff"),2.0,true)
+		draw_string(font,p+Vector2(-14,-31),"守护",HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#dceeff"))
+	if protected_hit:
+		var progress = clampf(effect_time/effect_duration,0.0,1.0)
+		var flash = sin(clampf((progress-0.3)/0.7,0.0,1.0)*PI)
+		draw_circle(p,25,Color(1,1,1,flash*0.85))
+		draw_arc(p,28+flash*5,0,TAU,40,Color(1,1,1,flash),3.0,true)
+		draw_string(font,p+Vector2(-14,-32),"免伤",HORIZONTAL_ALIGNMENT_LEFT,-1,14,Color.WHITE)
+	for index in danger_zones.size():
+		if danger_zones[index].owner_id == u.id:
+			draw_arc(p,25,0,TAU,40,ZONE_COLOR,2.0,true)
+	if hit:
+		draw_string(font,p+Vector2(-10,-30-effect_time*25),"-%d" % effect.amount,HORIZONTAL_ALIGNMENT_LEFT,-1,18,Color("#ffaaaa"))
+	var width = font.get_string_size(u.name,HORIZONTAL_ALIGNMENT_LEFT,-1,15).x
+	draw_string(font,p+Vector2(-width/2,-1),u.name,HORIZONTAL_ALIGNMENT_LEFT,-1,15,color)
+	var hp = "%d/%d" % [u.hp,u.max_hp]
+	width = font.get_string_size(hp,HORIZONTAL_ALIGNMENT_LEFT,-1,13).x
+	draw_string(font,p+Vector2(-width/2,17),hp,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color.WHITE)
+
+func unit_background(u: Dictionary, hit: bool = false) -> Color:
+	if u.team == "human" and (u.get("fleeing",false) or int(u.get("morale",100))==0):
+		return Color(1,1,1,0.45)
+	return Color("#702b35") if hit else Color("#132029")
 
 func board_cells() -> Array:
 	var dimensions = observation.get("board",{})

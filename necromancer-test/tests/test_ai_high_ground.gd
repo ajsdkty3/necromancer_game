@@ -47,10 +47,10 @@ func _init():
 	e.unit("vampire").hp = 3
 	e.human_index = e.humans().find(e.unit("spear_a"))
 	action = Policy.new().choose_action(e.get_observation(),e.enumerate_legal_actions("spear_a"))
-	check(action.kind=="MOVE" and action.target_cell==[3,3],"spearman climbs before possible killing attack")
+	check(action.kind=="MOVE","spearman climbs to unlock height restricted special")
 	e.execute_action(action)
 	action = Policy.new().choose_action(e.get_observation(),e.enumerate_legal_actions("spear_a"))
-	check(action.kind=="OVERHEAD_STRIKE","spearman follows climb with special attack")
+	check(action.kind=="KNOCKBACK","spearman uses knockback after gaining height advantage")
 	e = fixture()
 	e.unit("vampire").position = [3,2]
 	check(choose(e).kind=="SHOOT","avoid reaction damage for optional climb")

@@ -21,7 +21,7 @@ func fixture(id: String, height: int):
 		e.human_index = e.humans().find(e.unit(id))
 	return e
 func _init():
-	for id in ["vampire","zombie_a","spear_a","shield","archer"]:
+	for id in ["vampire","zombie_a","shield","archer"]:
 		for height in [0,1,2]:
 			var e = fixture(id,height)
 			var target = "vampire" if e.unit(id).team=="human" else "spear_a"
@@ -41,7 +41,7 @@ func _init():
 	e.unit("zombie_a").position = [2,0]
 	e.heights["2,0"] = 1
 	var events = e.execute_action({"actor_id":"spear_a","kind":"OVERHEAD_STRIKE","target_unit_id":"vampire"})
-	check(e.unit("zombie_a").hp==8,"spear secondary same-height target excluded")
+	check(e.unit("zombie_a").hp==8 and e.unit("vampire").hp==100 and e.unit("spear_a").ap==6,"removed spear overhead rejected without side effects")
 	e = fixture("archer",1)
 	e.unit("shield").position = [0,1]
 	var policy = Policy.new()

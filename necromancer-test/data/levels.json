@@ -169,5 +169,34 @@
     "initial_domination": 60,
     "domination_cap": 60,
     "domination_regen": 30
+  },
+  "8": {
+    "name": "第八关·矛兵测试",
+    "terrain": "res://data/terrain_mountains.json",
+    "unit_ids": ["vampire", "spear_a"],
+    "offset_overrides": {
+      "vampire": [12, 5],
+      "spear_a": [11, 5]
+    },
+    "camera_focus_offset": [12, 5]
+  },
+  "9": {
+    "name": "第九关·包围测试",
+    "width": 40,
+    "height": 10,
+    "terrain": "res://data/terrain_flat.json",
+    "unit_ids": ["zombie_a","zombie_b","zombie_c","zombie_d","zombie_e","zombie_f","zombie_g","zombie_h","shield"],
+    "offset_overrides": {
+      "shield": [10,4],
+      "zombie_a": [12,4],
+      "zombie_b": [11,2],
+      "zombie_c": [9,2],
+      "zombie_d": [8,4],
+      "zombie_e": [9,6],
+      "zombie_f": [11,6],
+      "zombie_g": [7,3],
+      "zombie_h": [7,5]
+    },
+    "camera_focus_offset": [10,4]
   }
 }

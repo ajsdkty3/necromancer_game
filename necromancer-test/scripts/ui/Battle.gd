@@ -183,17 +183,22 @@ func refresh():
 	board.highlighted = []
 	board.danger_cells = []
 	board.danger_zones = []
-	if not u.is_empty() and u.team == "undead" and observation.current_faction == "undead" and observation.winner == "" and mode in ["DEFAULT","MOVE"]:
-		for enemy in observation.units:
-			if enemy.alive and enemy.team != u.team:
-				var region = [Hex.decode(enemy.position)]
-				for encoded_cell in observation.zones.get(enemy.id,[]):
-					var cell = Hex.decode(encoded_cell)
-					region.append(cell)
-					if cell not in board.danger_cells:
-						board.danger_cells.append(cell)
-				if region.size() > 1:
-					board.danger_zones.append({"owner_id":enemy.id,"center":Hex.decode(enemy.position),"cells":region})
+	var zone_owners = []
+	if not u.is_empty() and observation.winner == "":
+		if u.team == "human":
+			zone_owners = [u]
+		elif observation.current_faction == "undead" and mode in ["DEFAULT","MOVE"]:
+			zone_owners = observation.units.filter(func(other): return other.team != u.team)
+	for enemy in zone_owners:
+		if enemy.alive:
+			var region = [Hex.decode(enemy.position)]
+			for encoded_cell in observation.zones.get(enemy.id,[]):
+				var cell = Hex.decode(encoded_cell)
+				region.append(cell)
+				if cell not in board.danger_cells:
+					board.danger_cells.append(cell)
+			if region.size() > 1:
+				board.danger_zones.append({"owner_id":enemy.id,"center":Hex.decode(enemy.position),"cells":region})
 	var wanted = "MOVE" if mode == "DEFAULT" else mode
 	for action in legal:
 		if action.kind != wanted:
@@ -228,16 +233,26 @@ func refresh():
 			details.text += "\n借机攻击：%s / 1（己方回合开始恢复）" % ("1" if u.reaction_ready else "0")
 		if u.get("guarding",false):
 			details.text += "\n守护中：至下次人类回合开始"
+		if u.team == "human":
+			details.text += "\n士气：%d / 100" % u.get("morale",100)
+			if u.get("fleeing",false):
+				if u.get("flee_trapped",false):
+					details.text += "\n完全被围：无法移动或恢复士气\n解除后重新溃逃2回合"
+				else:
+					details.text += " · 溃逃剩余%d回合" % maxi(0,int(u.flee_until_round)-int(observation.round)+1)
 		add_action("MOVE","移动：同高%d %s · 跨级+1" % [d.move_cost,"支配力" if u.team == "undead" else "AP"])
 		var damage_text = str(int(d.damage_min)) if d.damage_min == d.damage_max else "%d–%d" % [d.damage_min,d.damage_max]
 		add_action(d.kind,"%s：%d点 · 范围%d · 伤害%s" % [d.label,d.cost,d.range,damage_text])
-		if d.has("teleport_range"):
-			add_action("TELEPORT","瞬移：%d支配力 · 范围%d" % [d.teleport_cost,d.teleport_range])
 		if d.has("guard_cost"):
 			add_action("GUARD","守护：%d AP · 相邻6格 · 1回合" % d.guard_cost)
 		var bonus = Traits.damage_bonus(u,observation.units)
 		var heavy_damage = str((int(d.damage_min)+bonus)*2) if d.damage_min == d.damage_max else "%d–%d" % [(int(d.damage_min)+bonus)*2,(int(d.damage_max)+bonus)*2]
-		add_action("OVERHEAD_STRIKE","当头猛击：%d点 · 较低目标 · 伤害%s" % [d.cost,heavy_damage])
+		if d.has("knockback_cost"):
+			add_action("KNOCKBACK","优势动作·击退：3AP · 范围1\n伤害2，后退1格；坠落每级另受2伤害")
+		else:
+			add_action("OVERHEAD_STRIKE","优势动作·当头猛击：%d点\n伤害%s · 高处或包围目标" % [d.cost,heavy_damage])
+		if d.has("teleport_range"):
+			add_action("TELEPORT","瞬移：%d支配力 · 范围%d" % [d.teleport_cost,d.teleport_range])
 		var cancel = Button.new()
 		cancel.text = "[%d] 取消" % (actions.get_child_count() + 1)
 		cancel.pressed.connect(func(): mode = "DEFAULT"; refresh())
@@ -247,8 +262,10 @@ func refresh():
 
 func add_action(kind: String, label: String):
 	var button = Button.new()
+	if kind in ["KNOCKBACK","OVERHEAD_STRIKE"]:
+		button.tooltip_text = "优势动作：自身高于目标，或敌方目标相邻六格内有至少3名存活己方单位（包括行动者）。\n仍需满足范围、资源和近战高度差不超过1级的限制。"
 	if kind == "MOVE":
-		button.tooltip_text = "蓝色底色：可达格；红色边框：敌方借机攻击范围。\n走入不触发，从红框格继续移动或离开时触发。"
+		button.tooltip_text = "蓝色底色：可达格；半透明红色与红边：敌方借机攻击范围，重叠处红色更深。\n走入不触发，从红色区域继续移动或离开时触发。"
 	var available = legal.any(func(a): return a.kind == kind)
 	var reason = ""
 	if not available:
@@ -303,6 +320,11 @@ func restart_battle():
 	append_log(engine.level_name)
 	append_log("第 1 轮 · 亡灵先手 · 支配力 %d/%d" % [engine.domination,engine.domination_cap])
 	refresh()
+	var level_config = JSON.parse_string(FileAccess.get_file_as_string("res://data/levels.json"))[str(current_level)]
+	if level_config.has("camera_focus_offset"):
+		var focus = level_config.camera_focus_offset
+		board.position = get_viewport_rect().size*0.5-board.surface_center(Hex.from_offset(int(focus[0]),int(focus[1])))
+		clamp_board_position()
 
 func _process(delta: float):
 	var direction = Vector2.ZERO
@@ -463,7 +485,7 @@ func _unhandled_input(event: InputEvent):
 	if event.button_index != MOUSE_BUTTON_LEFT:
 		return
 	for u in observation.units:
-		if u.alive and u.team == "undead" and u.id == selected and Hex.decode(u.position) == cell:
+		if u.alive and u.id == selected and Hex.decode(u.position) == cell:
 			selected = ""
 			mode = "DEFAULT"
 			refresh()

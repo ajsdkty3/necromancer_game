@@ -4,6 +4,8 @@
   "reaction_order": "deployment_order",
   "spear_hit_order": "near_to_far",
   "units": [
+    {"id":"zombie_g","name":"僵尸庚","archetype":"zombie","team":"undead","offset":[7,3]},
+    {"id":"zombie_h","name":"僵尸辛","archetype":"zombie","team":"undead","offset":[7,5]},
     {
       "id": "vampire",
       "name": "吸血鬼",

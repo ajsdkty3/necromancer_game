@@ -117,8 +117,9 @@ func run():
 	check(scene.mode == "MOVE","one selects movement")
 	await press_key(KEY_2)
 	check(scene.mode == "MOVE","disabled attack cannot be selected by key")
-	await press_key(KEY_KP_3)
-	check(scene.mode == "TELEPORT","keypad three selects teleport")
+	check(scene.actions.get_child(2).text.contains("当头猛击") and scene.actions.get_child(3).text.contains("瞬移"),"vampire special third and teleport fourth")
+	await press_key(KEY_KP_4)
+	check(scene.mode == "TELEPORT","keypad four selects teleport")
 	check(scene.board.danger_cells.is_empty(),"teleport does not show reaction danger")
 	check(scene.engine.domination == 20 and scene.engine.history.is_empty(),"shortcut selects without executing")
 	await press_key(KEY_5)
@@ -253,12 +254,13 @@ func run():
 	scene.restart_battle()
 	check(not scene.board.is_playing() and scene.board.effect.is_empty(),"restart clears animation queue")
 	scene.engine.unit("spear_a").position = [10,3]
-	scene.engine.unit("spear_b").position = [9,6]
+	scene.engine.unit("spear_b").position = [9,5]
 	scene.selected = "vampire"
 	scene.refresh()
 	check(scene.board.danger_zones.size() == 2,"each spearman keeps independent boundary")
 	for zone in scene.board.danger_zones:
 		var expected = scene.engine.get_observation().zones[zone.owner_id].map(func(c): return Vector2i(int(c[0]),int(c[1])))
+		check(expected.all(func(c): return hex.distance(c,zone.center)<=1),"spear red zone restricted to one hex")
 		expected.append(zone.center)
 		check(zone.cells.size() == expected.size() and expected.all(func(c): return c in zone.cells),"boundary uses height-filtered zone and includes owner")
 		var perimeter = 0
@@ -268,14 +270,39 @@ func run():
 					perimeter += 1
 		check(scene.board.zone_edges(zone.cells).size() == perimeter,"height-clipped zone draws only perimeter edges")
 	check(scene.board.danger_zones[0].cells.any(func(cell): return cell in scene.board.danger_zones[1].cells),"preview includes overlapping zones")
+	var overlap_cell = scene.board.danger_zones[0].cells.filter(func(cell): return cell in scene.board.danger_zones[1].cells)[0]
+	check(scene.board.danger_layer_count(overlap_cell)==2,"overlap receives two translucent red layers")
 	scene.engine.unit("spear_a").reaction_ready = false
 	scene.refresh()
 	check(scene.board.danger_zones.size() == 1 and scene.board.danger_zones[0].owner_id == "spear_b","spent unit outline disappears while other remains")
+	check(scene.board.danger_layer_count(overlap_cell)==1,"spent reaction removes its fill layer")
 	scene.engine.unit("spear_a").reaction_ready = true
 	scene.refresh()
 	await process_frame
 	if DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw
 		root.get_texture().get_image().save_png("res://tests/battle_preview.png")
+	scene.selected = "spear_a"
+	scene.mode = "DEFAULT"
+	scene.refresh()
+	check(scene.board.danger_zones.size()==1 and scene.board.danger_zones[0].owner_id=="spear_a","inspected enemy shows only its own control zone")
+	check(scene.board.danger_cells.size()==6 and scene.board.highlighted.is_empty(),"enemy inspection shows adjacent control cells without movement highlights")
+	scene.board.position = Vector2(800,450)-scene.board.surface_center(hex.decode(scene.engine.unit("spear_a").position))
+	scene.clamp_board_position()
+	var enemy_point = scene.board.to_global(scene.board.surface_center(hex.decode(scene.engine.unit("spear_a").position)))
+	await click(enemy_point,MOUSE_BUTTON_LEFT)
+	check(scene.selected=="" and scene.mode=="DEFAULT" and scene.board.danger_zones.is_empty() and scene.board.danger_cells.is_empty(),"second click on enemy clears selection and control zone")
+	await click(enemy_point,MOUSE_BUTTON_LEFT)
+	check(scene.selected=="spear_a" and scene.board.danger_zones.size()==1,"enemy can be selected again after toggling off")
+	scene.engine.unit("spear_a").reaction_ready = false
+	scene.refresh()
+	check(scene.board.danger_zones.is_empty(),"inspected spent enemy shows no zone")
+	scene.engine.unit("spear_a").reaction_ready = true
+	scene.engine.unit("spear_a").fleeing = true
+	scene.refresh()
+	check(scene.board.danger_zones.is_empty(),"inspected fleeing enemy shows no zone")
+	scene.selected = "archer"
+	scene.refresh()
+	check(scene.board.danger_zones.is_empty(),"archer has no control zone")
 	print("UI RESULT: %d failures" % failures)
 	quit(1 if failures else 0)

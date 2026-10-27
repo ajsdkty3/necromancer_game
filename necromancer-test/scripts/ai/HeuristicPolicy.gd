@@ -3,6 +3,8 @@ const Hex = preload("res://scripts/core/HexGrid.gd")
 const Terrain = preload("res://scripts/core/Terrain.gd")
 const Guard = preload("res://scripts/core/GuardRules.gd")
 const Traits = preload("res://scripts/core/FactionTraits.gd")
+const Advantage = preload("res://scripts/core/AdvantageRules.gd")
+const Knockback = preload("res://scripts/core/KnockbackRules.gd")
 
 func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 	if legal_actions.is_empty():
@@ -12,8 +14,26 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 		if u.id == legal_actions[0].actor_id:
 			actor = u
 	var enemies = observation.units.filter(func(u): return u.alive and u.team != actor.team)
+	if actor.get("fleeing",false):
+		return legal_actions[0].duplicate(true)
 	if observation.has("focus_target_id"):
 		enemies = enemies.filter(func(u): return u.id==observation.focus_target_id)
+	var shove = {}
+	var shove_score = -INF
+	for action in legal_actions:
+		if action.kind != "KNOCKBACK":
+			continue
+		for enemy in enemies:
+			if enemy.id != action.target_unit_id:
+				continue
+			var landing = Knockback.landing(Hex.decode(actor.position),Hex.decode(enemy.position),observation.board,observation.units)
+			var damage = 2+Traits.damage_bonus(actor,observation.units)+landing.fall
+			var score = (100.0 if damage>=int(enemy.hp) else 0.0)+landing.fall*5.0-float(enemy.hp)*0.01
+			if score>shove_score:
+				shove_score = score
+				shove = action
+	if not shove.is_empty():
+		return shove.duplicate(true)
 	var best = legal_actions.back()
 	var best_score = 0.0
 	var best_single_hp = -1
@@ -108,7 +128,7 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 			var multiplier = 2 if action.kind == "OVERHEAD_STRIKE" else 1
 			if multiplier == 2:
 				var heights = observation.board.get("heights",{})
-				hits = hits.filter(func(u): return Terrain.height_at(heights,start)>Terrain.height_at(heights,Hex.decode(u.position)))
+				hits = hits.filter(func(u): return Advantage.qualifies(actor,u,start,heights,observation.units))
 			if hits.size() == 1 and target.team != actor.team:
 				single_hp = int(target.hp)
 			for hit in hits:
@@ -176,12 +196,16 @@ func has_clean_attack(observation: Dictionary, actor: Dictionary, cell: Vector2i
 			continue
 		if not enemy.alive or enemy.team == actor.team or Hex.distance(cell,Hex.decode(enemy.position)) > int(d.range) or not height_allowed(observation,actor,cell,Hex.decode(enemy.position)):
 			continue
-		if overhead and Terrain.height_at(heights,cell)<=Terrain.height_at(heights,Hex.decode(enemy.position)):
+		if overhead and not Advantage.qualifies(actor,enemy,cell,heights,observation.units):
+			continue
+		if overhead and d.has("knockback_cost"):
+			if Hex.distance(cell,Hex.decode(enemy.position)) <= int(d.knockback_range):
+				return true # Elevated spear special is single-target.
 			continue
 		var friendly_fire = false
 		for direction in (Hex.DIRECTIONS if d.target_shape == "spear" else []):
 			if Hex.decode(enemy.position) in [cell+direction,cell+direction*2]:
-				friendly_fire = observation.units.any(func(u): return u.alive and u.team == actor.team and u.id != actor.id and Hex.decode(u.position) in [cell+direction,cell+direction*2] and height_allowed(observation,actor,cell,Hex.decode(u.position)) and (not overhead or Terrain.height_at(heights,cell)>Terrain.height_at(heights,Hex.decode(u.position))))
+				friendly_fire = observation.units.any(func(u): return u.alive and u.team == actor.team and u.id != actor.id and Hex.decode(u.position) in [cell+direction,cell+direction*2] and height_allowed(observation,actor,cell,Hex.decode(u.position)) and (not overhead or Advantage.qualifies(actor,u,cell,heights,observation.units)))
 				break
 		if not friendly_fire:
 			return true

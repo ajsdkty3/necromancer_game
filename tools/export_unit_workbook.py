@@ -11,10 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "necromancer-test" / "data"
 definitions = json.loads((DATA / "units.json").read_text(encoding="utf-8"))
 members = json.loads((DATA / "battle_setup.json").read_text(encoding="utf-8"))["units"]
+archetype_order = list(definitions)
+members.sort(key=lambda member: archetype_order.index(member["archetype"]))
 output = ROOT / "单位数据表.xlsx"
 book = Workbook()
 book.remove(book.active)
-headers = ["单位", "生命值（HP）", "行动资源", "移动", "攻击", "特殊动作", "借机攻击", "特性"]
+headers = ["单位", "生命值（HP）", "行动资源", "移动", "攻击", "优势动作 / 其他技能", "借机攻击", "特性"]
 
 for team, title in [("undead", "己方"), ("human", "敌人")]:
     sheet = book.create_sheet(title)
@@ -54,26 +56,28 @@ for team, title in [("undead", "己方"), ("human", "敌人")]:
                 '同一友军被多人守护时按部署顺序转移一次。范围伤害命中自己及友军时，两份都承担。'
             )
         overhead = (
-            f'当头猛击：消耗{d["cost"]}{resource}，目标必须比自己低，且在普通攻击范围内。'
+            f'优势动作·当头猛击：消耗{d["cost"]}{resource}，自身高于目标，或敌方目标相邻六格内有至少3名存活己方单位（包括行动者）；目标仍须在普通攻击范围内。'
             + (f'基础伤害{d["damage_min"]*2}。' if d['damage_min'] == d['damage_max'] else f'基础伤害{d["damage_min"]*2}–{d["damage_max"]*2}。')
             + ('每名相邻人类友军额外增加2伤害。' if team == 'human' else '')
             + '守护转移不重复加成。'
-            + ('近战仅能命中低1级的目标。' if d['kind'] != 'SHOOT' else '射程内较低目标均可。')
-            + '沿用普通攻击形状和友伤规则，每个目标分别检查高度。'
+            + ('近战高度差不得超过1级。' if d['kind'] != 'SHOOT' else '远程无高度差上限。')
+            + '沿用普通攻击形状和友伤规则，每个目标分别检查优势条件。'
         )
+        if "knockback_cost" in d:
+            overhead = '优势动作·击退：3AP，范围1格单体，基础伤害2；自身高于目标，或敌方目标相邻六格内有至少3名存活己方单位（包括行动者）。近战高度差不得超过1级。\n目标后退1格，后方有障碍、任意单位、更高地势或越界则不移动，伤害仍结算。\n落到较低地势时另受每级2点坠落伤害；坠落不叠加众志成城。击退不触发借机攻击。'
         special = overhead if special == "无" else special + '\n\n' + overhead
         reaction = "无（没有控制区）"
         if d["zoc"]:
             reaction = (
                 f'控制区：{d["zoc"]}格。敌人从区域内继续移动或离开时，在离开旧格前触发；走入不触发。\n'
-                f'不消耗资源，每个单位仅可触发1次，在自身所属阵营回合开始时恢复；触发后红色范围消失。每个敌方目标受到{damage}伤害，不伤害友军。'
+                f'不消耗资源，每个单位仅可触发1次，在自身所属阵营回合开始时恢复；触发后红色范围消失。仅触发移动的敌人受到{damage}单体伤害，不波及其他单位。'
             )
             if d["target_shape"] == "spear":
-                reaction += "\n沿用穿刺形状：直线前1～2格范围伤害，非直线单体；跳过友军，不阻挡后方敌人受伤。"
+                reaction += "\n不使用普通穿刺的直线范围伤害；直线与非直线目标均只命中触发者。"
             reaction += "\n只覆盖和命中与攻击者高度差≤1级的格子及单位。"
         sheet.append([
             d["name"], d["hp"],
-            "共享支配力" if team == "undead" else "独立AP：每回合6点",
+            "共享支配力" if team == "undead" else "独立AP：每回合6点。\n初始士气100；相邻六格敌人3–4名-20、5名-40、6名-80（可解除的状态惩罚）。2格内每名友军阵亡累计-20。HP小于等于20%时-20、初始人数阵亡过半时-20（状态惩罚，不重复叠加）。\n士气0时溃逃2个人类回合，只向随机可达右边缘移动，禁用攻击/守护/借机；到达右边缘离场，不算阵亡。士气0且六面被敌人包围时无法移动或恢复，解除包围后重新计算2个溺逃回合；再次完全被围则清空计时并保持士气0。未离场则基础士气恢复到80，再扣当前状态惩罚；仅低血量与阵亡过半生效时为40士气，包围惩罚另计。",
             movement, attack, special, reaction,
             "魂归主宰：死亡时恢复5点共享支配力，不超过本关支配力上限。" if team == "undead" else "众志成城：每有1名相邻六格内的存活人类友军，造成的伤害+1。普通攻击、借机攻击、范围攻击每个目标均适用；守护转移不重复加成。不再减免受到的伤害。",
         ])

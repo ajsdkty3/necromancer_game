@@ -8,9 +8,9 @@ func check(ok: bool, message: String):
 		failures += 1
 		printerr(message)
 func _init():
-	for level in range(1,8):
+	for level in range(1,10):
 		var e = Rules.new(42,level)
-		check(e.units.size()==(16 if level==7 else 6),"unit count in level %d" % level)
+		check(e.units.size()==(16 if level==7 else (2 if level==8 else (9 if level==9 else 6))),"unit count in level %d" % level)
 		var occupied = {}
 		for u in e.units:
 			check(not occupied.has(e.pos(u)) and not Terrain.blocked(e.obstacles,e.pos(u)),"valid deployment")
@@ -28,6 +28,26 @@ func _init():
 				var expected = {"vampire":2,"zombie":6,"spearman":4,"archer":2,"shieldman":2}
 				check(e.units.filter(func(u): return u.archetype==archetype).size()==expected[archetype],"large map roster "+archetype)
 		# Terrain alone must connect every deployment; occupancy is temporary.
+		if level == 9:
+			check(e.board_width==40 and e.board_height==10,"encirclement map extended to the right")
+			check(e.units.filter(func(u): return u.archetype=="zombie").size()==8 and e.humans().size()==1 and e.humans()[0].archetype=="shieldman","encirclement test roster")
+			check(e.heights.is_empty() and e.obstacles.is_empty(),"encirclement test flat clear terrain")
+			var center = e.pos(e.unit("shield"))
+			var ids = ["zombie_a","zombie_b","zombie_c","zombie_d","zombie_e","zombie_f"]
+			for index in 6:
+				var action = {"actor_id":ids[index],"kind":"MOVE","target_cell":Hex.encode(center+Hex.DIRECTIONS[index])}
+				check(e.validate_action(action).valid,"one step to surround from each direction")
+				e.execute_action(action)
+				check(e.unit("shield").morale==[100,100,80,80,60,20][index],"test level exposes each encirclement threshold")
+			check(e.enumerate_legal_actions("zombie_a").any(func(a): return a.kind=="OVERHEAD_STRIKE" and a.target_unit_id=="shield"),"flat encirclement enables advantage action")
+		if level == 8:
+			check(e.units.map(func(u): return u.archetype)==["vampire","spearman"],"test level roster")
+			check(Hex.distance(e.pos(e.unit("vampire")),e.pos(e.unit("spear_a")))==1,"test units start adjacent")
+			e.execute_action({"kind":"END_TURN"})
+			var action = {"actor_id":"spear_a","kind":"KNOCKBACK","target_unit_id":"vampire"}
+			check(e.validate_action(action).valid,"opening shove available")
+			var hits = e.execute_action(action).filter(func(v): return v.type=="damage")
+			check(hits.size()==2 and hits[0].amount==2 and hits[1].amount==4,"opening shove demonstrates two-level fall")
 		var queue = [e.pos(e.units[0])]
 		var visited = {queue[0]:true}
 		var head = 0

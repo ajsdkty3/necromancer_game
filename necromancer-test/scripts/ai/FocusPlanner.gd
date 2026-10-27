@@ -2,6 +2,7 @@ extends RefCounted
 const Hex = preload("res://scripts/core/HexGrid.gd")
 const Terrain = preload("res://scripts/core/Terrain.gd")
 const Traits = preload("res://scripts/core/FactionTraits.gd")
+const Advantage = preload("res://scripts/core/AdvantageRules.gd")
 const VALUES = {"vampire":10,"zombie":3}
 
 # Rebuild from the remaining team each decision. Conservative minimum damage
@@ -16,7 +17,7 @@ func plan(observation: Dictionary) -> Dictionary:
 		var contributors = {}
 		for index in range(int(observation.human_index),humans.size()):
 			var actor = humans[index]
-			if not actor.alive or actor.get("guarding",false):
+			if not actor.alive or actor.get("guarding",false) or actor.get("fleeing",false):
 				continue
 			var damage = potential_damage(observation,actor,target)
 			if damage > 0:
@@ -49,16 +50,20 @@ func potential_damage(o: Dictionary, actor: Dictionary, target: Dictionary) -> i
 		var cell: Vector2i = queue[head]
 		head += 1
 		if Hex.distance(cell,target_cell) <= int(d.range) and Terrain.attack_height_allowed(heights,cell,target_cell,d.kind):
-			var overhead = Terrain.height_at(heights,cell)>Terrain.height_at(heights,target_cell)
-			if clean_shot(o,actor,cell,target_cell,overhead):
+			var overhead = not d.has("knockback_cost") and Advantage.qualifies(actor,target,cell,heights,o.units)
+			var shove = d.has("knockback_cost") and Hex.distance(cell,target_cell)<=int(d.knockback_range) and Advantage.qualifies(actor,target,cell,heights,o.units)
+			if shove or clean_shot(o,actor,cell,target_cell,overhead):
 				var preview = o.units.duplicate(true)
 				var moved = actor.duplicate(true)
 				moved.position = Hex.encode(cell)
 				for u in preview:
 					if u.id == actor.id:
 						u.position = moved.position
-				var damage = (int(d.damage_min)+Traits.damage_bonus(moved,preview))*(2 if overhead else 1)
-				best = maxi(best,int((int(actor.ap)-costs[cell])/int(d.cost))*damage)
+				var damage = (int(d.knockback_damage if shove else d.damage_min)+Traits.damage_bonus(moved,preview))*(2 if overhead else 1)
+				# A shove changes range and position; conservatively count one hit,
+				# then replan rather than assuming repeated attacks still reach.
+				var count = 1 if shove else int((int(actor.ap)-costs[cell])/int(d.cost))
+				best = maxi(best,count*damage)
 		# Do not budget a route that requires taking reaction damage.
 		var threatened = false
 		for enemy in o.units:
@@ -88,6 +93,6 @@ func clean_shot(o: Dictionary, actor: Dictionary, cell: Vector2i, target: Vector
 			continue
 		for ally in o.units:
 			var position = Hex.decode(ally.position)
-			if ally.alive and ally.team==actor.team and ally.id!=actor.id and position in [cell+direction,cell+direction*2] and Terrain.attack_height_allowed(heights,cell,position,d.kind) and (not overhead or Terrain.height_at(heights,cell)>Terrain.height_at(heights,position)):
+			if ally.alive and ally.team==actor.team and ally.id!=actor.id and position in [cell+direction,cell+direction*2] and Terrain.attack_height_allowed(heights,cell,position,d.kind) and (not overhead or Advantage.qualifies(actor,ally,cell,heights,o.units)):
 				return false
 	return true
