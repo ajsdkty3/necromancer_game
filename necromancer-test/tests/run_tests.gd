@@ -79,37 +79,37 @@ func test_combat():
 	var e = arrange({"spear_a":[3,3],"zombie_a":[4,3],"spear_b":[5,3],"archer":[15,0]})
 	e.faction = "human"
 	var events = e.execute_action({"actor_id":"spear_a","kind":"SPEAR_THRUST","target_unit_id":"zombie_a"})
-	check(count(events,"damage") == 2 and e.unit("spear_b").hp < 10,"spear friendly fire")
+	check(count(events,"damage") == 2 and e.unit("spear_b").hp < 14,"spear friendly fire")
 	check(e.unit("spear_a").ap == 3,"spear costs three")
 	e.execute_action({"actor_id":"spear_a","kind":"SPEAR_THRUST","target_unit_id":"zombie_a"})
 	check(e.unit("spear_a").ap == 0,"repeat attacks")
 	e = arrange({"spear_a":[3,3],"zombie_a":[4,4],"spear_b":[4,3]})
 	e.faction = "human"
 	events = e.execute_action({"actor_id":"spear_a","kind":"SPEAR_THRUST","target_unit_id":"zombie_a"})
-	check(count(events,"damage") == 1 and e.unit("spear_b").hp == 10,"off-axis spear single target")
+	check(count(events,"damage") == 1 and e.unit("spear_b").hp == 14,"off-axis spear single target")
 	e = arrange({"archer":[0,0],"spear_a":[1,0],"zombie_a":[3,0]})
 	e.faction = "human"
 	e.human_index = 2
 	events = e.execute_action({"actor_id":"archer","kind":"SHOOT","target_unit_id":"zombie_a"})
-	check(count(events,"damage") == 1 and e.unit("spear_a").hp == 10,"archer ignores intermediate unit")
+	check(count(events,"damage") == 1 and e.unit("spear_a").hp == 14,"archer ignores intermediate unit")
 	e = arrange({"vampire":[0,0],"zombie_a":[1,0],"archer":[15,0]})
 	events = e.execute_action({"actor_id":"vampire","kind":"MELEE_ATTACK","target_unit_id":"zombie_a"})
-	check(e.domination == 12 and e.unit("zombie_a").hp < 8,"explicit friendly attack")
+	check(e.domination == 12 and e.unit("zombie_a").hp < 10,"explicit friendly attack")
 	e = arrange({"vampire":[0,0],"archer":[1,0]})
 	e.unit("archer").hp = 1
 	events = e.execute_action({"actor_id":"vampire","kind":"MELEE_ATTACK","target_unit_id":"archer"})
 	check(e.winner == "undead" and count(events,"victory") == 1,"immediate victory")
 	check(not e.validate_action(move("vampire",0,1)).valid,"terminal actions rejected")
 	e = arrange({"vampire":[0,0],"zombie_a":[1,0],"archer":[3,0]})
-	e.apply_damage("archer","vampire",15,"test")
+	e.apply_damage("archer","vampire",20,"test")
 	check(not e.is_terminal(),"vampire death is not defeat")
-	e.apply_damage("archer","zombie_a",8,"test")
+	e.apply_damage("archer","zombie_a",10,"test")
 	check(e.winner == "human","all undead dead")
 	e = arrange({"spear_a":[0,0],"zombie_a":[1,0],"spear_b":[2,0]})
 	e.faction = "human"
 	e.unit("zombie_a").hp = 1
 	e.execute_action({"actor_id":"spear_a","kind":"SPEAR_THRUST","target_unit_id":"zombie_a"})
-	check(e.winner == "human" and e.unit("spear_b").hp == 10,"near first and stop remaining hits at victory")
+	check(e.winner == "human" and e.unit("spear_b").hp == 14,"near first and stop remaining hits at victory")
 
 func test_reactions():
 	var e = arrange({"zombie_a":[0,0],"spear_a":[3,0]})
@@ -137,7 +137,7 @@ func test_reactions():
 	check(e.unit("zombie_a").reaction_ready,"undead reset at undead turn start")
 	e = arrange({"zombie_a":[4,4],"spear_a":[3,3],"zombie_b":[4,3]})
 	events = e.execute_action(move("zombie_a",5,4))
-	check(count(events,"damage") == 0 and e.unit("zombie_b").hp == 8,"distance two off-axis cell outside reaction range")
+	check(count(events,"damage") == 0 and e.unit("zombie_b").hp == 10,"distance two off-axis cell outside reaction range")
 	e = arrange({"zombie_a":[0,0],"spear_a":[2,1]})
 	e.unit("zombie_a").hp = 1
 	events = e.execute_action(move("zombie_a",3,0))
@@ -152,13 +152,13 @@ func test_reactions():
 	check(count(events,"damage") == 2,"no friendly damage event from reactions")
 	e = arrange({"spear_a":[0,0],"archer":[1,0],"zombie_a":[2,0]})
 	events = e.execute_action(move("zombie_a",2,1))
-	check(count(events,"damage") == 0 and e.unit("archer").hp == 8 and e.unit("zombie_a").hp == 8,"far enemy outside one-cell reaction range")
+	check(count(events,"damage") == 0 and e.unit("archer").hp == 10 and e.unit("zombie_a").hp == 10,"far enemy outside one-cell reaction range")
 	e = arrange({"spear_a":[0,0],"zombie_a":[1,0],"zombie_b":[2,0]})
 	events = e.execute_action(move("zombie_a",1,1))
-	check(count(events,"damage") == 1 and e.unit("zombie_a").hp < 8 and e.unit("zombie_b").hp == 8,"reaction hits only near triggering enemy")
+	check(count(events,"damage") == 1 and e.unit("zombie_a").hp < 10 and e.unit("zombie_b").hp == 10,"reaction hits only near triggering enemy")
 	e = arrange({"spear_a":[0,0],"zombie_a":[1,0],"zombie_b":[2,0]})
 	events = e.execute_action(move("zombie_b",2,1))
-	check(count(events,"damage") == 0 and e.unit("zombie_a").hp == 8 and e.unit("zombie_b").hp == 8,"moving far enemy does not trigger reaction on near enemy")
+	check(count(events,"damage") == 0 and e.unit("zombie_a").hp == 10 and e.unit("zombie_b").hp == 10,"moving far enemy does not trigger reaction on near enemy")
 
 func test_pathfinding():
 	var e = arrange({"zombie_a":[0,0],"zombie_b":[1,0],"archer":[15,0]})
@@ -197,7 +197,7 @@ func test_ai_and_replay():
 	a.execute_action(selected)
 	var adjusted = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
 	check(adjusted.kind == "SPEAR_THRUST","ordinary attack after safe reposition")
-	check(a.unit("spear_b").hp==10,"blocked shove does not damage blocking friend")
+	check(a.unit("spear_b").hp==14,"blocked shove does not damage blocking friend")
 	# Ally stands between the rear spearman and the enemy, matching the reported case.
 	a = arrange({"spear_a":[3,3],"spear_b":[4,3],"vampire":[5,3]})
 	a.faction = "human"
@@ -208,7 +208,7 @@ func test_ai_and_replay():
 	check(selected.kind == "MOVE","rear spearman repositions without height advantage")
 	a.execute_action(selected)
 	adjusted = policy.choose_action(a.get_observation(),a.enumerate_legal_actions("spear_a"))
-	check(a.validate_action(adjusted).valid and a.unit("spear_b").hp==10,"reassess after shove without hurting friend")
+	check(a.validate_action(adjusted).valid and a.unit("spear_b").hp==14,"reassess after shove without hurting friend")
 	for actor_id in ["archer","spear_a"]:
 		var targeting = arrange({actor_id:[3,3],"vampire":[4,3],"zombie_a":[3,4]})
 		targeting.faction = "human"
@@ -226,10 +226,10 @@ func test_ai_and_replay():
 		check(updated.get("target_unit_id","") == "vampire","single hit reevaluates current HP")
 	var area = arrange({"spear_a":[3,3],"vampire":[4,3],"zombie_a":[5,3],"zombie_b":[3,4]})
 	area.faction = "human"
-	area.unit("zombie_b").hp = 4
+	area.unit("zombie_b").hp = 100
 	var area_choice = policy.choose_action(area.get_observation(),area.enumerate_legal_actions("spear_a"))
 	check(area_choice.kind=="SPEAR_THRUST" and area_choice.target_unit_id in ["vampire","zombie_a"],"flat ground uses ordinary area attack")
-	for spec in [["archer",5,2,"SHOOT"],["spear_a",2,3,"SPEAR_THRUST"]]:
+	for spec in [["archer",5,4,"SHOOT"],["spear_a",2,3,"SPEAR_THRUST"]]:
 		var actor_id: String = spec[0]
 		var radius: int = spec[1]
 		var cost: int = spec[2]

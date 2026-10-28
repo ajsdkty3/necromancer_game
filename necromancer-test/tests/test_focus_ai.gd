@@ -27,12 +27,20 @@ func _init():
 	var action = ai.choose_action(e.get_observation(),e.enumerate_legal_actions("spear_a"))
 	check(ai.focus_plan.target_id=="vampire" and ai.focus_plan.value==10,"high value target beats low HP zombie")
 	check(ai.focus_plan.contributors.size()==2 and ai.focus_plan.damage>=4,"combined team damage enables focus")
-	check(action.get("target_unit_id","")=="vampire","first actor follows team focus")
+	var steps = 0
+	while action.kind=="MOVE" and steps<3:
+		var events = e.execute_action(action)
+		check(not events.any(func(event): return event.type=="reaction"),"focus reposition avoids reactions")
+		steps += 1
+		action = ai.choose_action(e.get_observation(),e.enumerate_legal_actions("spear_a"))
+	check(action.kind=="SPEAR_THRUST" and e.attack_targets(e.unit("spear_a"),e.unit(action.get("target_unit_id",""))).has("vampire"),"repositioned attack still hits original focus target")
+	e = fixture()
 	e.unit("vampire").hp = 100
 	ai.choose_action(e.get_observation(),e.enumerate_legal_actions("spear_a"))
 	check(ai.focus_plan.target_id=="zombie_a" and ai.focus_plan.value==3,"unreachable kill budget falls back to killable zombie")
 	e = fixture()
 	e.human_index = 1
+	e.unit("vampire").hp = 6
 	ai.choose_action(e.get_observation(),e.enumerate_legal_actions("spear_b"))
 	check(ai.focus_plan.target_id=="zombie_a","already finished actors excluded from remaining budget")
 	e = fixture()

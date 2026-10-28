@@ -117,7 +117,7 @@ func run():
 	check(scene.mode == "MOVE","one selects movement")
 	await press_key(KEY_2)
 	check(scene.mode == "MOVE","disabled attack cannot be selected by key")
-	check(scene.actions.get_child(2).text.contains("当头猛击") and scene.actions.get_child(3).text.contains("瞬移"),"vampire special third and teleport fourth")
+	check(scene.actions.get_child(2).text.contains("猩红之吻") and scene.actions.get_child(3).text.contains("瞬移"),"vampire special third and teleport fourth")
 	await press_key(KEY_KP_4)
 	check(scene.mode == "TELEPORT","keypad four selects teleport")
 	check(scene.board.danger_cells.is_empty(),"teleport does not show reaction danger")
@@ -165,7 +165,7 @@ func run():
 	check(scene.board.is_playing(),"next attack can animate")
 	scene.level_menu.get_popup().id_pressed.emit(2)
 	check(scene.current_level == 2 and scene.engine.units.size() == 6,"menu selects second level")
-	check(scene.engine.humans().size() == 3 and scene.engine.unit("archer").is_empty() and scene.engine.unit("shield").hp == 20,"second level has two spearmen and shieldman")
+	check(scene.engine.humans().size() == 3 and scene.engine.unit("archer").is_empty() and scene.engine.unit("shield").hp == 30,"second level has two spearmen and shieldman")
 	check(not scene.board.is_playing() and scene.engine.domination == 20,"level switch resets animation and resources")
 	check(scene.status.text.contains("/ 3"),"second level progress uses three enemies")
 	check(scene.level_menu.text.contains("第二关"),"menu shows current level")
@@ -206,7 +206,7 @@ func run():
 	scene.board._process(0.03)
 	check(scene.board.unit_offset("spear_a") != Vector2.ZERO,"protected unit trembles slightly")
 	scene.board._process(0.15)
-	check(scene.board.visual_unit("spear_a").hp == 10,"protected animation keeps ally HP")
+	check(scene.board.visual_unit("spear_a").hp == 14,"protected animation keeps ally HP")
 	if DisplayServer.get_name() != "headless":
 		scene.board.set_process(false)
 		await RenderingServer.frame_post_draw
@@ -232,7 +232,7 @@ func run():
 		check(not occupied.has(str(u.position)),"third level deployment has no overlapping units")
 		occupied[str(u.position)] = true
 	check(scene.engine.humans().map(func(u): return u.archetype) == ["spearman","archer","shieldman"],"third level has spear archer shield in action order")
-	check(scene.engine.unit("vampire").hp == 15 and scene.engine.unit("zombie_a").hp == 8 and scene.engine.unit("zombie_b").hp == 8,"third level preserves undead roster")
+	check(scene.engine.unit("vampire").hp == 20 and scene.engine.unit("zombie_a").hp == 10 and scene.engine.unit("zombie_b").hp == 10,"third level preserves undead roster")
 	scene.level_menu.get_popup().id_pressed.emit(100)
 	check(scene.current_level == 3 and scene.engine.level_id == 3,"restart keeps third level")
 	scene.engine.execute_action({"kind":"END_TURN"})

@@ -4,8 +4,26 @@
   "reaction_order": "deployment_order",
   "spear_hit_order": "near_to_far",
   "units": [
-    {"id":"zombie_g","name":"僵尸庚","archetype":"zombie","team":"undead","offset":[7,3]},
-    {"id":"zombie_h","name":"僵尸辛","archetype":"zombie","team":"undead","offset":[7,5]},
+    {
+      "id": "zombie_g",
+      "name": "僵尸庚",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        7,
+        3
+      ]
+    },
+    {
+      "id": "zombie_h",
+      "name": "僵尸辛",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        7,
+        5
+      ]
+    },
     {
       "id": "vampire",
       "name": "吸血鬼",
@@ -163,6 +181,66 @@
       "team": "human",
       "offset": [
         38,
+        6
+      ]
+    },
+    {
+      "id": "undead_spearman",
+      "name": "亡灵矛兵",
+      "team": "undead",
+      "archetype": "undead_spearman",
+      "offset": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": "undead_archer",
+      "name": "亡灵弓兵",
+      "team": "undead",
+      "archetype": "undead_archer",
+      "offset": [
+        1,
+        4
+      ]
+    },
+    {
+      "id": "undead_shieldman",
+      "name": "亡灵盾兵",
+      "team": "undead",
+      "archetype": "undead_shieldman",
+      "offset": [
+        1,
+        6
+      ]
+    },
+    {
+      "id": "knight",
+      "name": "骑士",
+      "team": "human",
+      "archetype": "knight",
+      "offset": [
+        17,
+        4
+      ]
+    },
+    {
+      "id": "undead_knight",
+      "name": "亡灵骑士",
+      "team": "undead",
+      "archetype": "undead_knight",
+      "offset": [
+        2,
+        4
+      ]
+    },
+    {
+      "id": "archer_c",
+      "name": "弓兵丙",
+      "team": "human",
+      "archetype": "archer",
+      "offset": [
+        17,
         6
       ]
     }

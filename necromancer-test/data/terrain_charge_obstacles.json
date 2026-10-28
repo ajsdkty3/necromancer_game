@@ -1,0 +1,13 @@
+{
+  "heights": {},
+  "obstacles": {
+    "5,4": true,
+    "7,2": true,
+    "7,7": true,
+    "10,3": true,
+    "10,6": true,
+    "13,1": true,
+    "13,5": true,
+    "15,7": true
+  }
+}

@@ -8,10 +8,21 @@ func check(ok: bool, message: String):
 		failures += 1
 		printerr(message)
 func _init():
-	for level in range(1,10):
+	for level in range(1,14):
 		var e = Rules.new(42,level)
-		check(e.units.size()==(16 if level==7 else (2 if level==8 else (9 if level==9 else 6))),"unit count in level %d" % level)
+		check(e.units.size()==(4 if level in [12,13] else (16 if level==7 else (2 if level==8 else (9 if level==9 else 6)))),"unit count in level %d" % level)
 		var occupied = {}
+		if level == 12:
+			check(e.units.map(func(u): return u.archetype)==["undead_knight","archer","archer","archer"],"undead knight versus three archers")
+		if level == 13:
+			check(e.units.map(func(u): return u.archetype)==["zombie","zombie","zombie","knight"],"three zombies versus knight")
+		if level == 11:
+			check(e.units.map(func(u): return u.archetype)==["undead_knight","vampire","zombie","knight","spearman","spearman"],"knight level roster")
+			check(e.unit("knight").hp==20 and e.unit("knight").ap==12 and e.unit("undead_knight").hp==10,"knight level stats")
+		if level == 10:
+			check(e.units.map(func(u): return u.archetype)==["undead_spearman","undead_archer","undead_shieldman","spearman","archer","shieldman"],"undead counterpart roster")
+			check(e.heights.is_empty() and e.obstacles.is_empty(),"counterpart level flat terrain")
+			check(e.units.map(func(u): return u.hp)==[7,7,15,14,10,30],"counterpart HP")
 		for u in e.units:
 			check(not occupied.has(e.pos(u)) and not Terrain.blocked(e.obstacles,e.pos(u)),"valid deployment")
 			occupied[e.pos(u)] = true

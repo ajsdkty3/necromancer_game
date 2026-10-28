@@ -5,6 +5,8 @@ const Hex = preload("res://scripts/core/HexGrid.gd")
 const Board = preload("res://scripts/ui/HexBoardView.gd")
 const AI = preload("res://scripts/ai/AIController.gd")
 const Traits = preload("res://scripts/core/FactionTraits.gd")
+const Charge = preload("res://scripts/core/ChargeRules.gd")
+const Terrain = preload("res://scripts/core/Terrain.gd")
 const AI_MOVE_DELAY = 0.10
 const AI_ACTION_DELAY = 0.38
 const EDGE_PAN_MARGIN = 24.0
@@ -181,6 +183,9 @@ func refresh():
 	board.selected_id = selected
 	board.targeting = mode
 	board.highlighted = []
+	board.charge_path_cells = []
+	board.blocked_charge_cells = []
+	board.charge_attack_preview = []
 	board.danger_cells = []
 	board.danger_zones = []
 	var zone_owners = []
@@ -209,7 +214,23 @@ func refresh():
 			for target in observation.units:
 				if target.id == action.target_unit_id:
 					board.highlighted.append(Hex.decode(target.position))
+	if mode == "CHARGE" and not u.is_empty():
+		var charge_paths = Charge.paths(u,observation.board,observation.units,int(observation.definitions[u.archetype].charge_range))
+		var charge_start = Hex.decode(u.position)
+		var charge_range = int(observation.definitions[u.archetype].charge_range)
+		for direction in Hex.DIRECTIONS:
+			if charge_start+direction*charge_range in board.highlighted:
+				continue
+			for distance in range(1,charge_range+1):
+				var path_cell = charge_start+direction*distance
+				if Hex.inside(path_cell,int(observation.board.width),int(observation.board.height)):
+					board.blocked_charge_cells.append(path_cell)
+		for endpoint in board.highlighted:
+			for path_cell in charge_paths.get(endpoint,[]):
+				if path_cell not in board.charge_path_cells:
+					board.charge_path_cells.append(path_cell)
 	board.queue_redraw()
+	update_charge_preview()
 	level_menu.text = "菜单 · %s ▾" % observation.level_name
 	for index in level_menu.get_popup().item_count:
 		if level_menu.get_popup().is_item_radio_checkable(index):
@@ -226,13 +247,17 @@ func refresh():
 		details.text = "单位详情\n\n左键选择单位\n绿色：亡灵  ·  金色：人类"
 	else:
 		var d = observation.definitions[u.archetype]
-		var resource_text = "全队支配力 %d/%d" % [observation.undead_domination,observation.domination_cap] if u.team == "undead" else "AP %d/6" % u.ap
+		var resource_text = "全队支配力 %d/%d" % [observation.undead_domination,observation.domination_cap] if u.team == "undead" else "AP %d/%d" % [u.ap,u.max_ap]
 		details.text = "%s · %s\n阵营：%s\nHP %d / %d\n%s" % [u.name,d.role,"亡灵" if u.team == "undead" else "人类",u.hp,u.max_hp,resource_text]
 		details.text += "\n魂归主宰：死亡恢复5支配力" if u.team == "undead" else "\n众志成城：每相邻人类友军伤害+1"
 		if int(d.zoc) > 0:
 			details.text += "\n借机攻击：%s / 1（己方回合开始恢复）" % ("1" if u.reaction_ready else "0")
 		if u.get("guarding",false):
-			details.text += "\n守护中：至下次人类回合开始"
+			details.text += "\n守护中：至下次所属阵营回合开始"
+		if u.get("stunned",false):
+			details.text += "\n眩晕：本回合无法行动" if u.get("stun_skip_active",false) else "\n眩晕：下个所属阵营回合无法行动"
+		if mode == "CHARGE":
+			details.text += "\n直线冲锋3格，移动不触发借机攻击\n到达自动攻击前方3格，含友伤并击退"
 		if u.team == "human":
 			details.text += "\n士气：%d / 100" % u.get("morale",100)
 			if u.get("fleeing",false):
@@ -242,30 +267,50 @@ func refresh():
 					details.text += " · 溃逃剩余%d回合" % maxi(0,int(u.flee_until_round)-int(observation.round)+1)
 		add_action("MOVE","移动：同高%d %s · 跨级+1" % [d.move_cost,"支配力" if u.team == "undead" else "AP"])
 		var damage_text = str(int(d.damage_min)) if d.damage_min == d.damage_max else "%d–%d" % [d.damage_min,d.damage_max]
-		add_action(d.kind,"%s：%d点 · 范围%d · 伤害%s" % [d.label,d.cost,d.range,damage_text])
+		add_action(d.kind,"%s：%d点 · %s · 伤害%s" % [d.label,d.cost,"直线冲锋恰好%d格" % d.charge_range if d.kind=="CHARGE" else "范围%d" % d.range,damage_text])
+		if d.kind=="CHARGE":
+			actions.get_child(actions.get_child_count()-1).text += "\n前方3格含友伤 · 击退1格\n冲锋移动不触发借机攻击"
+		if d.get("ordinary_knockback",false):
+			actions.get_child(actions.get_child_count()-1).text += "\n击退1格；受阻不位移，下降另算坠落伤害"
+		if d.kind=="SHOOT":
+			actions.get_child(actions.get_child_count()-1).text += "\n向上高差≤2，向下不限；中间单位不阻挡"
 		if d.has("guard_cost"):
-			add_action("GUARD","守护：%d AP · 相邻6格 · 1回合" % d.guard_cost)
+			add_action("GUARD","守护：%d%s · 相邻6格 · 1回合" % [d.guard_cost,"支配力" if u.team == "undead" else "AP"])
 		var bonus = Traits.damage_bonus(u,observation.units)
 		var heavy_damage = str((int(d.damage_min)+bonus)*2) if d.damage_min == d.damage_max else "%d–%d" % [(int(d.damage_min)+bonus)*2,(int(d.damage_max)+bonus)*2]
-		if d.has("knockback_cost"):
-			add_action("KNOCKBACK","优势动作·击退：3AP · 范围1\n伤害2，后退1格；坠落每级另受2伤害")
+		if d.has("overhead_damage"):
+			heavy_damage = str(int(d.overhead_damage)+bonus)
+		if d.has("stomp_cost"):
+			add_action("WAR_STOMP","优势动作·战争践踏：%d点 · 范围%d\n伤害%d–%d · 击退1格，击退或击杀后跟进" % [d.stomp_cost,d.stomp_range,d.stomp_damage_min,d.stomp_damage_max])
+		elif d.has("knockback_cost"):
+			add_action("KNOCKBACK","优势动作·击退：%d%s · 范围%d\n伤害%d，后退1格；坠落每级另受%d伤害" % [d.knockback_cost,"支配力" if u.team == "undead" else "AP",d.knockback_range,d.knockback_damage,d.get("fall_damage_per_height",2)])
 		else:
-			add_action("OVERHEAD_STRIKE","优势动作·当头猛击：%d点\n伤害%s · 高处或包围目标" % [d.cost,heavy_damage])
+			if d.has("advantage_heal"):
+				add_action("OVERHEAD_STRIKE","优势动作·%s：%d点\n造成%d伤害，恢复自身%d生命（不超过上限）" % [d.advantage_label,d.get("advantage_cost",d.cost),d.overhead_damage,d.advantage_heal])
+			elif d.has("advantage_hits"):
+				add_action("OVERHEAD_STRIKE","优势动作·%s：%d点\n连续%d次，每次%d–%d伤害 · 高处或包围目标" % [d.advantage_label,d.get("advantage_cost",d.cost),d.advantage_hits,d.advantage_damage_min,d.advantage_damage_max])
+			else:
+				add_action("OVERHEAD_STRIKE","优势动作·%s：%d点\n伤害%s · 范围%d · 高处或包围目标" % [d.get("advantage_label","当头猛击"),d.get("advantage_cost",d.cost),heavy_damage,d.range])
+		if d.get("advantage_stun",false):
+			actions.get_child(actions.get_child_count()-1).text += "\n眩晕：下个所属阵营回合无法行动，不叠加"
 		if d.has("teleport_range"):
 			add_action("TELEPORT","瞬移：%d支配力 · 范围%d" % [d.teleport_cost,d.teleport_range])
 		var cancel = Button.new()
 		cancel.text = "[%d] 取消" % (actions.get_child_count() + 1)
-		cancel.pressed.connect(func(): mode = "DEFAULT"; refresh())
+		cancel.disabled = board.is_playing()
+		cancel.pressed.connect(cancel_action)
 		actions.add_child(cancel)
 	result_panel.visible = observation.winner != "" and not board.is_playing()
 	result_label.text = "胜利 · 人类全灭" if observation.winner == "undead" else "失败 · 亡灵全灭"
 
 func add_action(kind: String, label: String):
 	var button = Button.new()
-	if kind in ["KNOCKBACK","OVERHEAD_STRIKE"]:
+	if kind in ["KNOCKBACK","OVERHEAD_STRIKE","WAR_STOMP"]:
 		button.tooltip_text = "优势动作：自身高于目标，或敌方目标相邻六格内有至少3名存活己方单位（包括行动者）。\n仍需满足范围、资源和近战高度差不超过1级的限制。"
 	if kind == "MOVE":
 		button.tooltip_text = "蓝色底色：可达格；半透明红色与红边：敌方借机攻击范围，重叠处红色更深。\n走入不触发，从红色区域继续移动或离开时触发。"
+	if kind == "CHARGE":
+		button.tooltip_text = "消耗5点，直线移动恰好3格；冲锋移动不触发借机攻击。\n到达自动攻击正前方、左右前方3格中的所有单位（含友军），每个目标基础5伤害并向远离骑士方向击退1格。\n后方障碍、单位、更高地形或越界会阻止击退；伤害照常结算。向下击退另结算每级2点坠落伤害。"
 	var available = legal.any(func(a): return a.kind == kind)
 	var reason = ""
 	if not available:
@@ -277,6 +322,8 @@ func add_action(kind: String, label: String):
 			reason = "（AI行动中）"
 		elif u.team != "undead":
 			reason = "（敌方单位）"
+		elif u.get("stunned",false):
+			reason = "（眩晕中）"
 	button.text = "[%d] %s" % [actions.get_child_count() + 1,label] + ("\n" + reason if reason != "" else "")
 	button.disabled = not available or observation.current_faction != "undead" or board.is_playing()
 	button.pressed.connect(func():
@@ -299,6 +346,12 @@ func perform(action: Dictionary):
 	if engine.faction != previous:
 		selected = ""
 		ai_calls = 0
+	refresh()
+
+func cancel_action():
+	if board.is_playing():
+		return
+	mode = "DEFAULT"
 	refresh()
 
 func select_level(id: int):
@@ -341,6 +394,7 @@ func _process(delta: float):
 	board.position += direction.normalized() * 500 * delta
 	clamp_board_position()
 	update_move_hint()
+	update_charge_preview()
 	if board.is_playing() or observation.current_faction != "human" or observation.winner != "":
 		return
 	ai_delay -= delta
@@ -415,6 +469,7 @@ func bounded_board_position(desired: Vector2, viewport_size: Vector2) -> Vector2
 func _input(event: InputEvent):
 	if event is InputEventMouseMotion:
 		update_move_hint(event.position)
+		update_charge_preview(event.position)
 	# Release remains visible even if the pointer finishes over a UI panel.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE and not event.pressed:
 		dragging = false
@@ -463,8 +518,7 @@ func _unhandled_input(event: InputEvent):
 			get_viewport().set_input_as_handled()
 			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		mode = "DEFAULT"
-		refresh()
+		cancel_action()
 		get_viewport().set_input_as_handled()
 	if not event is InputEventMouseButton or not event.pressed:
 		return
@@ -484,6 +538,9 @@ func _unhandled_input(event: InputEvent):
 		return
 	if event.button_index != MOUSE_BUTTON_LEFT:
 		return
+	if mode == "CHARGE":
+		try_target(cell,mode)
+		return
 	for u in observation.units:
 		if u.alive and u.id == selected and Hex.decode(u.position) == cell:
 			selected = ""
@@ -499,6 +556,38 @@ func _unhandled_input(event: InputEvent):
 			selected = u.id
 			refresh()
 			return
+
+func charge_preview_at(cell: Vector2i) -> Array:
+	var actor = selected_unit()
+	if mode!="CHARGE" or actor.is_empty() or board.is_playing() or observation.current_faction!="undead" or observation.winner!="":
+		return []
+	var paths = Charge.paths(actor,observation.board,observation.units,int(observation.definitions[actor.archetype].charge_range))
+	for action in legal:
+		if action.kind!="CHARGE":
+			continue
+		var endpoint = Hex.decode(action.target_cell)
+		if cell not in paths.get(endpoint,[]):
+			continue
+		var result = []
+		for direction in Hex.DIRECTIONS:
+			var target = endpoint+direction
+			if Hex.inside(target,int(observation.board.width),int(observation.board.height)) and Charge.target_in_direction(Hex.decode(actor.position),endpoint,target) and Terrain.attack_height_allowed(observation.board.heights,endpoint,target,"CHARGE"):
+				result.append(target)
+		return result
+	return []
+
+func update_charge_preview(pointer: Vector2 = Vector2.INF):
+	if not is_instance_valid(board) or observation.is_empty():
+		return
+	if pointer==Vector2.INF:
+		pointer = get_viewport().get_mouse_position()
+	var preview = []
+	if mode=="CHARGE" and get_viewport().gui_get_hovered_control()==null and not level_menu.get_popup().visible:
+		var local = board.get_global_transform_with_canvas().affine_inverse()*pointer
+		preview = charge_preview_at(board.cell_at_point(local))
+	if board.charge_attack_preview!=preview:
+		board.charge_attack_preview = preview
+		board.queue_redraw()
 
 func try_target(cell: Vector2i, kind: String):
 	for action in legal:

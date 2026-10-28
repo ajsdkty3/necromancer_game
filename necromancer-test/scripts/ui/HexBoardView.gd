@@ -3,6 +3,9 @@ const Terrain = preload("res://scripts/core/Terrain.gd")
 const Hex = preload("res://scripts/core/HexGrid.gd")
 var observation: Dictionary = {}
 var highlighted: Array = []
+var charge_path_cells: Array = []
+var blocked_charge_cells: Array = []
+var charge_attack_preview: Array = []
 var danger_cells: Array = []
 var danger_zones: Array = []
 const ZONE_COLOR = Color("#ff354f")
@@ -165,8 +168,10 @@ func advance_effect():
 	while not pending_events.is_empty():
 		var event = pending_events.pop_front()
 		match event.type:
+			"heal":
+				visual_unit(event.unit_id).hp = event.hp
 			"move":
-				if visual_unit(event.actor_id).team == "undead" or event.get("forced",false):
+				if visual_unit(event.actor_id).team == "undead" or event.get("forced",false) or event.get("charge",false):
 					effect = event
 					effect_time = 0.0
 					effect_duration = MOVE_STEP_DURATION
@@ -188,6 +193,8 @@ func advance_effect():
 					visual_unit(event.unit_id).fleeing = false
 			"guard_expired":
 				visual_unit(event.actor_id).guarding = false
+			"stun","stun_expired":
+				visual_unit(event.unit_id).stunned = event.type=="stun"
 			"attack","reaction","damage","protected","guard":
 				effect = event
 				effect_time = 0.0
@@ -344,10 +351,19 @@ func draw_terrain_cell(cell: Vector2i):
 				draw_line(a+Vector2(0,(tier+1)*Terrain.LIFT),b+Vector2(0,(tier+1)*Terrain.LIFT),Color("#302c26"),1.0,true)
 	var fill = [Color("#243b35"),Color("#526548"),Color("#7b8457"),Color("#92946b"),Color("#aaa68a"),Color("#c4bfaa")][mini(height,5)]
 	if cell in highlighted:
-		fill = Color("#315965").lightened(height*0.10) if targeting in ["DEFAULT","MOVE"] else Color("#74483e").lightened(height*0.08)
+		fill = Color("#315965").lightened(height*0.10) if targeting in ["DEFAULT","MOVE","CHARGE"] else Color("#74483e").lightened(height*0.08)
 		if targeting == "TELEPORT":
 			fill = Color("#74483e")
+	if targeting == "CHARGE" and cell in blocked_charge_cells:
+		fill = Color("#666b73")
+	if targeting == "CHARGE" and (cell in charge_path_cells or cell in highlighted):
+		fill = Color("#83cce8") if cell in highlighted else Color("#245b9c")
 	draw_colored_polygon(points,fill)
+	if cell in charge_attack_preview:
+		draw_colored_polygon(points,Color(1.0,0.12,0.20,0.58))
+		var outline = points.duplicate()
+		outline.append(outline[0])
+		draw_polyline(outline,Color("#ff5269"),2.5,true)
 	# Blend once per controller, including overlaps with reachable cells.
 	# Draw on the terrain surface before units so labels remain readable.
 	for layer in danger_layer_count(cell):
@@ -379,6 +395,9 @@ func draw_unit(u: Dictionary):
 	if u.id == selected_id:
 		draw_arc(p,29,0,TAU,32,Color("#fff3bd"),2.5,true)
 	draw_circle(p,23,unit_background(u,hit))
+	if u.get("stunned",false):
+		draw_arc(p,26,0,TAU,32,Color("#e6c6ff"),2.0,true)
+		draw_string(font,p+Vector2(-14,-31),"眩晕",HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#e6c6ff"))
 	if u.get("guarding",false):
 		draw_arc(p,27,0,TAU,40,Color("#dceeff"),2.0,true)
 		draw_string(font,p+Vector2(-14,-31),"守护",HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#dceeff"))

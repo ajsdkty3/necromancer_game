@@ -8,6 +8,7 @@ const Advantage = preload("res://scripts/core/AdvantageRules.gd")
 const Knockback = preload("res://scripts/core/KnockbackRules.gd")
 const Morale = preload("res://scripts/core/MoraleRules.gd")
 const FleePaths = preload("res://scripts/core/FleePaths.gd")
+const Charge = preload("res://scripts/core/ChargeRules.gd")
 var initial_human_count = 0
 var human_deaths = 0
 var heights: Dictionary = {}
@@ -54,8 +55,8 @@ func _init(seed_override: int = -1, requested_level: int = 1):
 		var offset = level.get("offset_overrides",{}).get(entry.id,entry.offset)
 		units.append({"id":entry.id,"name":entry.name,"team":entry.team,"archetype":entry.archetype,
 			"position":Hex.encode(Hex.from_offset(int(offset[0]),int(offset[1]))),
-			"hp":int(d.hp),"max_hp":int(d.hp),"ap":6 if entry.team == "human" else 0,
-			"max_ap":6 if entry.team == "human" else 0,"alive":true,"guarding":false,"reaction_ready":true})
+			"hp":int(d.hp),"max_hp":int(d.hp),"ap":int(d.get("max_ap",6)) if entry.team == "human" else 0,
+			"max_ap":int(d.get("max_ap",6)) if entry.team == "human" else 0,"alive":true,"guarding":false,"reaction_ready":true,"stunned":false,"stun_skip_active":false})
 		if entry.team == "human":
 			initial_human_count += 1
 			units.back().merge({"morale_base":100,"morale":100,"fleeing":false,"flee_trapped":false,"flee_until_round":0,"flee_target":[],"escaped":false})
@@ -156,14 +157,14 @@ func get_zone_controllers(cell: Vector2i, mover_team: String) -> Array:
 	var result = []
 	for u in units:
 		var radius = int(definitions[u.archetype].zoc)
-		if u.alive and not u.get("fleeing",false) and u.reaction_ready and u.team != mover_team and radius > 0 and Hex.distance(pos(u),cell) <= radius and Terrain.attack_height_allowed(heights,pos(u),cell,definitions[u.archetype].kind):
+		if u.alive and not u.get("stunned",false) and not u.get("fleeing",false) and u.reaction_ready and u.team != mover_team and radius > 0 and Hex.distance(pos(u),cell) <= radius and Terrain.attack_height_allowed(heights,pos(u),cell,definitions[u.archetype].kind):
 			result.append(u.id)
 	return result
 
 # Weighted shortest paths: resource cost first, reaction count second.
 func path_tree(actor_id: String) -> Dictionary:
 	var u = unit(actor_id)
-	if u.is_empty() or not u.alive:
+	if u.is_empty() or not u.alive or u.get("stunned",false):
 		return {}
 	var start = pos(u)
 	var budget = resource(u)
@@ -225,6 +226,8 @@ func enumerate_legal_actions(actor_id: String) -> Array:
 		return []
 	var result = []
 	var d = definitions[u.archetype]
+	if u.get("stunned",false):
+		return [{"actor_id":actor_id,"kind":"END_UNIT" if faction=="human" else "END_TURN"}]
 	if u.get("fleeing",false):
 		if u.flee_trapped or Morale.adjacent_enemies(u,units)>=6:
 			return [{"actor_id":actor_id,"kind":"END_UNIT"}]
@@ -237,13 +240,22 @@ func enumerate_legal_actions(actor_id: String) -> Array:
 		return result
 	for cell in get_reachable_cells(actor_id):
 		result.append({"actor_id":actor_id,"kind":"MOVE","target_cell":Hex.encode(cell)})
-	if resource(u) >= int(d.cost):
+	if d.has("charge_range"):
+		if resource(u)>=int(d.cost):
+			for cell in Charge.paths(u,board_data(),units,int(d.charge_range)):
+				result.append({"actor_id":actor_id,"kind":"CHARGE","target_cell":Hex.encode(cell)})
+		if resource(u)>=int(d.stomp_cost):
+			for target in units:
+				if target.alive and target.id!=u.id and Hex.distance(pos(u),pos(target))<=int(d.stomp_range) and Terrain.attack_height_allowed(heights,pos(u),pos(target),d.kind) and Advantage.qualifies(u,target,pos(u),heights,units):
+					result.append({"actor_id":actor_id,"kind":"WAR_STOMP","target_unit_id":target.id})
+	else:
 		for target in units:
 			if target.alive and target.id != actor_id and Hex.distance(pos(u),pos(target)) <= int(d.range) and Terrain.attack_height_allowed(heights,pos(u),pos(target),d.kind):
-				result.append({"actor_id":actor_id,"kind":d.kind,"target_unit_id":target.id})
+				if resource(u)>=int(d.cost):
+					result.append({"actor_id":actor_id,"kind":d.kind,"target_unit_id":target.id})
 				if d.has("knockback_cost") and resource(u)>=int(d.knockback_cost) and Hex.distance(pos(u),pos(target))<=int(d.knockback_range) and Advantage.qualifies(u,target,pos(u),heights,units):
 					result.append({"actor_id":actor_id,"kind":"KNOCKBACK","target_unit_id":target.id})
-				elif not d.has("knockback_cost") and Advantage.qualifies(u,target,pos(u),heights,units):
+				elif not d.has("knockback_cost") and resource(u)>=int(d.get("advantage_cost",d.cost)) and Advantage.qualifies(u,target,pos(u),heights,units):
 					result.append({"actor_id":actor_id,"kind":"OVERHEAD_STRIKE","target_unit_id":target.id})
 	if d.has("teleport_range") and resource(u) >= int(d.teleport_cost):
 		for cell in Hex.cells(board_width,board_height):
@@ -266,6 +278,25 @@ func validate_action(action: Dictionary) -> Dictionary:
 		if legal == action:
 			return {"valid":true,"reason":""}
 	return {"valid":false,"reason":"目标非法、不可到达或资源不足"}
+
+func charge_targets(actor: Dictionary, start: Vector2i) -> Array:
+	if not actor.alive or actor.get("stunned",false) or actor.get("fleeing",false):
+		return []
+	return Charge.targets(actor,start,pos(actor),board_data(),units)
+
+func resolve_knockback(actor: Dictionary, target: Dictionary):
+	if not target.alive or is_terminal():
+		return
+	var landing = Knockback.landing(pos(actor),pos(target),board_data(),units)
+	if landing.blocked:
+		emit("knockback_blocked",target.name+" 后方受阻，无法击退")
+	else:
+		var old = target.position.duplicate()
+		target.position = Hex.encode(landing.cell)
+		emit("move",target.name+" 被击退一格",{"actor_id":target.id,"from":old,"to":target.position.duplicate(),"forced":true})
+		if landing.fall>0:
+			var fall_damage = int(landing.fall / 2) * int(definitions[actor.archetype].get("fall_damage_per_height",2))
+			apply_damage(actor.id,target.id,fall_damage,"坠落",1,false)
 
 func emit(type: String, message: String, data: Dictionary = {}):
 	var event = data.duplicate(true)
@@ -334,10 +365,20 @@ func check_winner():
 func attack(actor: Dictionary, target: Dictionary, reaction: bool, overhead: bool = false):
 	var d = definitions[actor.archetype]
 	if reaction:
-		if not actor.reaction_ready or actor.get("fleeing",false):
+		if not actor.reaction_ready or actor.get("fleeing",false) or actor.get("stunned",false):
 			return
 		actor.reaction_ready = false
 	var label = "当头猛击" if overhead else d.label
+	if overhead:
+		label = d.get("advantage_label",label)
+	if overhead and d.has("advantage_hits"):
+		for hit_index in int(d.advantage_hits):
+			if is_terminal() or not actor.alive or not target.alive:
+				break
+			emit("attack",actor.name+" "+d.advantage_label+" → "+target.name+"（第%d击）" % (hit_index+1),
+				{"actor_id":actor.id,"target_id":target.id})
+			apply_damage(actor.id,target.id,rng.randi_range(int(d.advantage_damage_min),int(d.advantage_damage_max)),d.advantage_label)
+		return
 	emit("reaction" if reaction else "attack",actor.name + (" 借机攻击 " if reaction else " " + label + " → ") + target.name,
 		{"actor_id":actor.id,"target_id":target.id})
 	var hits = [target.id] if reaction else attack_targets(actor,target)
@@ -348,15 +389,34 @@ func attack(actor: Dictionary, target: Dictionary, reaction: bool, overhead: boo
 			continue
 		if overhead and not Advantage.qualifies(actor,unit(target_id),pos(actor),heights,units):
 			continue
-		apply_damage(actor.id,target_id,rng.randi_range(int(d.damage_min),int(d.damage_max)),"借机攻击" if reaction else label,2 if overhead else 1)
+		if overhead and d.has("overhead_damage"):
+			apply_damage(actor.id,target_id,int(d.overhead_damage),label)
+		else:
+			apply_damage(actor.id,target_id,rng.randi_range(int(d.damage_min),int(d.damage_max)),"借机攻击" if reaction else label,2 if overhead else 1)
+		if not reaction:
+			if overhead and d.get("advantage_stun",false):
+				apply_stun(unit(target_id))
+			elif not overhead and d.get("ordinary_knockback",false):
+				resolve_knockback(actor,unit(target_id))
+	if overhead and d.has("advantage_heal") and actor.alive:
+		var previous_hp = int(actor.hp)
+		actor.hp = mini(int(actor.max_hp),previous_hp+int(d.advantage_heal))
+		emit("heal","%s %s：恢复%d生命，HP %d/%d" % [actor.name,label,actor.hp-previous_hp,actor.hp,actor.max_hp],
+			{"unit_id":actor.id,"amount":actor.hp-previous_hp,"hp":actor.hp})
 
 func advance_human():
 	var list = humans()
 	while human_index < list.size() and not list[human_index].alive:
 		human_index += 1
 	if human_index >= list.size() and not is_terminal():
+		finish_stuns("human")
 		finish_flee_round()
 		faction = "undead"
+		begin_stuns("undead")
+		for u in units:
+			if u.team == "undead" and u.guarding:
+				u.guarding = false
+				emit("guard_expired",u.name + " 守护结束",{"actor_id":u.id})
 		reset_reactions("undead")
 		round_number += 1
 		domination = mini(domination_cap,domination+domination_regen)
@@ -367,6 +427,24 @@ func reset_reactions(team: String):
 		if u.alive and u.team == team and not u.get("fleeing",false):
 			u.reaction_ready = true
 	emit("reaction_reset","%s阵营借机攻击次数恢复" % team,{"team":team})
+
+func begin_stuns(team: String):
+	for u in units:
+		if u.alive and u.team==team and u.get("stunned",false):
+			u.stun_skip_active = true
+
+func finish_stuns(team: String):
+	for u in units:
+		if u.team==team and u.get("stun_skip_active",false):
+			u.stunned = false
+			u.stun_skip_active = false
+			emit("stun_expired",u.name+" 眩晕结束",{"unit_id":u.id})
+
+func apply_stun(target: Dictionary):
+	if target.alive and not is_terminal() and not target.get("stunned",false):
+		target.stunned = true
+		target.stun_skip_active = false
+		emit("stun",target.name+" 眩晕：下个所属阵营回合无法行动",{"unit_id":target.id})
 
 func execute_action(action: Dictionary) -> Array:
 	events = []
@@ -379,20 +457,58 @@ func execute_action(action: Dictionary) -> Array:
 	var kind = action.kind
 	var actor = unit(str(action.get("actor_id","")))
 	if kind == "END_TURN":
+		finish_stuns("undead")
 		faction = "human"
+		begin_stuns("human")
 		reset_reactions("human")
 		human_index = 0
 		for u in humans():
-			u.ap = 6
+			u.ap = u.max_ap
 			if u.guarding:
 				u.guarding = false
 				emit("guard_expired",u.name + " 守护结束",{"actor_id":u.id})
-		emit("turn","人类回合 · 各单位恢复至 6 AP")
+		emit("turn","人类回合 · 各单位AP恢复至自身上限")
 		advance_human()
+	elif kind == "CHARGE":
+		var d = definitions[actor.archetype]
+		var start = actor.position.duplicate()
+		var path = Charge.paths(actor,board_data(),units,int(d.charge_range))[Hex.decode(action.target_cell)]
+		spend(actor,int(d.cost))
+		emit("path",actor.name+" 沿直线冲锋",{"actor_id":actor.id,"path":path.map(func(c): return Hex.encode(c))})
+		for cell in path:
+			var old = actor.position.duplicate()
+			actor.position = Hex.encode(cell)
+			emit("move",actor.name+" 冲锋",{"actor_id":actor.id,"from":old,"to":actor.position.duplicate(),"charge":true})
+			refresh_morale()
+			if is_terminal() or not actor.alive or actor.get("fleeing",false):
+				break
+		# Snapshot target IDs before knockbacks so each covered unit is hit once.
+		var hits = charge_targets(actor,Hex.decode(start)).map(func(u): return u.id)
+		if not hits.is_empty() and not is_terminal():
+			emit("attack",actor.name+" 冲锋范围攻击",{"actor_id":actor.id,"target_id":hits[0]})
+		for target_id in hits:
+			if is_terminal() or not actor.alive or actor.get("fleeing",false):
+				break
+			var target = unit(target_id)
+			apply_damage(actor.id,target.id,int(d.damage_min),"骑士冲锋")
+			resolve_knockback(actor,target)
+		emit("charge_end",actor.name+" 冲锋结束",{"actor_id":actor.id})
+	elif kind == "WAR_STOMP":
+		var d = definitions[actor.archetype]
+		var target = unit(action.target_unit_id)
+		spend(actor,int(d.stomp_cost))
+		emit("attack",actor.name+" 战争践踏 → "+target.name,{"actor_id":actor.id,"target_id":target.id})
+		var target_cell = pos(target)
+		apply_damage(actor.id,target.id,rng.randi_range(int(d.stomp_damage_min),int(d.stomp_damage_max)),"战争践踏")
+		resolve_knockback(actor,target)
+		if actor.alive and occupant(target_cell).is_empty() and (not target.alive or pos(target)!=target_cell):
+			var old = actor.position.duplicate()
+			actor.position = Hex.encode(target_cell)
+			emit("move",actor.name+" 践踏跟进",{"actor_id":actor.id,"from":old,"to":actor.position.duplicate(),"forced":true})
 	elif kind == "GUARD":
 		spend(actor,int(definitions[actor.archetype].guard_cost))
 		actor.guarding = true
-		emit("guard",actor.name + " 开启守护，持续至下次人类回合开始",{"actor_id":actor.id})
+		emit("guard",actor.name + " 开启守护，持续至下次所属阵营回合开始",{"actor_id":actor.id})
 	elif kind == "END_UNIT":
 		emit("end_unit",actor.name + " 结束行动")
 		human_index += 1
@@ -423,24 +539,16 @@ func execute_action(action: Dictionary) -> Array:
 	elif kind == "KNOCKBACK":
 		spend(actor,int(definitions[actor.archetype].knockback_cost))
 		var target = unit(action.target_unit_id)
-		var landing = Knockback.landing(pos(actor),pos(target),{"width":board_width,"height":board_height,"heights":heights,"obstacles":obstacles},units)
 		emit("attack",actor.name+" 击退 → "+target.name,{"actor_id":actor.id,"target_id":target.id})
 		apply_damage(actor.id,target.id,int(definitions[actor.archetype].knockback_damage),"击退")
-		if target.alive and not is_terminal():
-			if landing.blocked:
-				emit("knockback_blocked",target.name+" 后方受阻，无法击退")
-			else:
-				var old = target.position.duplicate()
-				target.position = Hex.encode(landing.cell)
-				emit("move",target.name+" 被击退一格",{"actor_id":target.id,"from":old,"to":target.position.duplicate(),"forced":true})
-				if landing.fall>0:
-					apply_damage(actor.id,target.id,landing.fall,"坠落",1,false)
+		resolve_knockback(actor,target)
 	elif kind == "TELEPORT":
 		spend(actor,int(definitions[actor.archetype].teleport_cost))
 		actor.position = action.target_cell.duplicate()
 		emit("teleport",actor.name + " 瞬移至 " + str(actor.position),{"actor_id":actor.id,"to":actor.position.duplicate()})
 	else:
-		spend(actor,int(definitions[actor.archetype].cost))
+		var d = definitions[actor.archetype]
+		spend(actor,int(d.get("advantage_cost",d.cost)) if kind=="OVERHEAD_STRIKE" else int(d.cost))
 		attack(actor,unit(action.target_unit_id),false,kind == "OVERHEAD_STRIKE")
 	refresh_morale()
 	if faction == "human":
@@ -454,7 +562,7 @@ func get_observation(_team: String = "") -> Dictionary:
 		if u.alive:
 			var radius = int(definitions[u.archetype].zoc)
 			zones[u.id] = []
-			if radius > 0 and u.reaction_ready and not u.get("fleeing",false):
+			if radius > 0 and u.reaction_ready and not u.get("stunned",false) and not u.get("fleeing",false):
 				for cell in Hex.cells(board_width,board_height):
 					if cell != pos(u) and Hex.distance(pos(u),cell) <= radius and Terrain.attack_height_allowed(heights,pos(u),cell,definitions[u.archetype].kind):
 						zones[u.id].append(Hex.encode(cell))

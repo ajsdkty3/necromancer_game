@@ -26,19 +26,19 @@ func activate(e):
 
 func _init():
 	var e = fixture()
-	check(e.unit("shield").hp == 20 and e.unit("shield").ap == 6,"shield base stats")
+	check(e.unit("shield").hp == 30 and e.unit("shield").ap == 6,"shield base stats")
 	activate(e)
-	check(e.unit("shield").guarding and e.unit("shield").ap == 3,"guard costs three")
+	check(e.unit("shield").guarding and e.unit("shield").ap == 0,"guard costs six")
 	check(not e.validate_action({"actor_id":"shield","kind":"GUARD"}).valid,"guard cannot stack or refresh in same turn")
 	e.execute_action({"actor_id":"shield","kind":"END_UNIT"})
 	check(e.unit("shield").guarding,"guard persists through undead turn")
 	var events = e.apply_damage("vampire","spear_a",4,"test")
-	check(e.unit("spear_a").hp == 10 and e.unit("shield").hp == 16,"all damage redirects")
+	check(e.unit("spear_a").hp == 14 and e.unit("shield").hp == 26,"all damage redirects")
 	check(events[0].type == "protected" and events[1].target == "shield","protected visual precedes guardian hit")
 	e.execute_action({"kind":"END_TURN"})
 	check(not e.unit("shield").guarding and e.unit("shield").ap == 6,"expires at next human start")
 	e.apply_damage("vampire","spear_a",2,"test")
-	check(e.unit("spear_a").hp == 8,"expired guard does not protect")
+	check(e.unit("spear_a").hp == 12,"expired guard does not protect")
 
 	e = fixture()
 	e.unit("shield").guarding = true
@@ -48,25 +48,25 @@ func _init():
 	other.position = [4,2]
 	e.units.append(other)
 	e.apply_damage("vampire","shield",3,"test")
-	check(e.unit("shield").hp == 17 and other.hp == 20,"active guardians do not guard each other")
+	check(e.unit("shield").hp == 27 and other.hp == 30,"active guardians do not guard each other")
 	e.apply_damage("vampire","shield_b",2,"test")
-	check(e.unit("shield").hp == 17 and other.hp == 18,"mutual exclusion is symmetric")
+	check(e.unit("shield").hp == 27 and other.hp == 28,"mutual exclusion is symmetric")
 	e.apply_damage("vampire","spear_a",2,"test")
-	check(e.unit("shield").hp == 15 and other.hp == 18,"multiple guardians use deployment order once")
+	check(e.unit("shield").hp == 25 and other.hp == 28,"multiple guardians use deployment order once")
 	other.guarding = false
 	e.apply_damage("vampire","shield_b",2,"test")
-	check(e.unit("shield").hp == 13 and other.hp == 18,"active guard protects inactive shield")
+	check(e.unit("shield").hp == 23 and other.hp == 28,"active guard protects inactive shield")
 	e.unit("shield").hp = 1
 	e.apply_damage("vampire","spear_a",4,"test")
-	check(not e.unit("shield").alive and e.unit("spear_a").hp == 10,"guardian dies without spillback")
+	check(not e.unit("shield").alive and e.unit("spear_a").hp == 14,"guardian dies without spillback")
 	e.apply_damage("vampire","spear_a",2,"test")
-	check(e.unit("spear_a").hp == 8,"dead guardian no longer protects")
+	check(e.unit("spear_a").hp == 12,"dead guardian no longer protects")
 	other.guarding = true
 	e.apply_damage("vampire","spear_a",2,"test")
-	check(e.unit("spear_a").hp == 8 and other.hp == 16,"next living guardian can protect")
+	check(e.unit("spear_a").hp == 12 and other.hp == 26,"next living guardian can protect")
 	other.position = [12,3]
 	e.apply_damage("vampire","spear_a",2,"test")
-	check(e.unit("spear_a").hp == 6,"only adjacent six cells protected")
+	check(e.unit("spear_a").hp == 10,"only adjacent six cells protected")
 
 	# Real spear area: first target is protected; second hit is the guardian itself.
 	e = fixture()
@@ -80,7 +80,7 @@ func _init():
 	var damage = events.filter(func(event): return event.type == "damage")
 	check(damage.size() == 2,"area hits guardian twice")
 	check(damage.all(func(event): return event.target == "shield"),"both area damage instances land on guardian")
-	check(e.unit("shield").hp == before-damage[0].amount-damage[1].amount and e.unit("vampire").hp == 15,"area damage sums independent rolls")
+	check(e.unit("shield").hp == before-damage[0].amount-damage[1].amount and e.unit("vampire").hp == 20,"area damage sums independent rolls")
 	# Reactions also use the same redirection.
 	e.faction = "undead"
 	events = e.execute_action({"actor_id":"vampire","kind":"MOVE","target_cell":[3,4]})
@@ -99,8 +99,9 @@ func _init():
 	check(policy.choose_action(e.get_observation(),e.enumerate_legal_actions("shield")).kind != "GUARD","AI does not repeat active guard")
 	e.unit("vampire").position = [4,4]
 	var bash = {"actor_id":"shield","kind":"SHIELD_BASH","target_unit_id":"vampire"}
+	e.unit("shield").ap = 6
 	events = e.execute_action(bash)
-	check(e.unit("shield").ap == 0 and e.unit("vampire").hp in [12,13],"shield bash base one to two plus adjacent ally bonus")
+	check(e.unit("shield").ap == 0 and e.unit("vampire").hp == 18,"shield bash base one to two plus adjacent ally bonus")
 
 	var replay_source = Rules.new(7,2)
 	# Active guard prioritizes protecting two allies even over a guaranteed kill.

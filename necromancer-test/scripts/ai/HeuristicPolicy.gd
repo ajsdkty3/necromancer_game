@@ -5,6 +5,8 @@ const Guard = preload("res://scripts/core/GuardRules.gd")
 const Traits = preload("res://scripts/core/FactionTraits.gd")
 const Advantage = preload("res://scripts/core/AdvantageRules.gd")
 const Knockback = preload("res://scripts/core/KnockbackRules.gd")
+const Charge = preload("res://scripts/core/ChargeRules.gd")
+const Knight = preload("res://scripts/ai/KnightPolicy.gd")
 
 func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 	if legal_actions.is_empty():
@@ -18,6 +20,18 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 		return legal_actions[0].duplicate(true)
 	if observation.has("focus_target_id"):
 		enemies = enemies.filter(func(u): return u.id==observation.focus_target_id)
+	if observation.definitions[actor.archetype].has("charge_range"):
+		var knight_action = Knight.choose(observation,legal_actions,actor)
+		if not knight_action.is_empty():
+			return knight_action
+	if observation.definitions[actor.archetype].target_shape == "spear":
+		var double_target = spear_double_target(observation,actor,Hex.decode(actor.position))
+		for action in legal_actions:
+			if action.kind == "SPEAR_THRUST" and action.target_unit_id == double_target:
+				return action.duplicate(true)
+		var double_move = choose_spear_reposition(observation,legal_actions,actor,true)
+		if not double_move.is_empty():
+			return double_move
 	var shove = {}
 	var shove_score = -INF
 	for action in legal_actions:
@@ -110,7 +124,7 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 							score += 1.5
 			for enemy in enemies:
 				var radius = int(observation.definitions[enemy.archetype].zoc)
-				if enemy.get("reaction_ready",true) and radius > 0 and Hex.distance(start,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),start):
+				if (enemy.get("reaction_ready",true) and not enemy.get("stunned",false)) and radius > 0 and Hex.distance(start,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),start):
 					score -= 12.0
 		elif action.has("target_unit_id"):
 			var target = {}
@@ -139,9 +153,21 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 					score -= 100.0
 				else:
 					score += 20.0 + (1.0 if multiplier == 2 else 0.0)
-					if receiver.hp <= (int(d.damage_min)+bonus)*multiplier:
+					if action.kind=="OVERHEAD_STRIKE" and d.get("advantage_stun",false) and not hit.get("stunned",false):
+						score += 35.0
+					var damage_min = int(d.stomp_damage_min if action.kind=="WAR_STOMP" else d.damage_min)
+					var damage_max = int(d.stomp_damage_max if action.kind=="WAR_STOMP" else d.damage_max)
+					if action.kind=="OVERHEAD_STRIKE" and d.has("overhead_damage"):
+						damage_min = int(d.overhead_damage)
+						damage_max = damage_min
+						multiplier = 1
+					if action.kind=="OVERHEAD_STRIKE" and d.has("advantage_hits"):
+						damage_min = int(d.advantage_damage_min)*int(d.advantage_hits)
+						damage_max = int(d.advantage_damage_max)*int(d.advantage_hits)
+						multiplier = 1
+					if receiver.hp <= (damage_min+bonus)*multiplier:
 						score += 70.0
-					elif receiver.hp <= (int(d.damage_max)+bonus)*multiplier:
+					elif receiver.hp <= (damage_max+bonus)*multiplier:
 						score += 15.0
 		# Fixed damage makes kill tiers monotonic in HP; break single-hit ties by
 		# current absolute HP, never percentage. Area/friendly-fire scores stay intact.
@@ -211,7 +237,20 @@ func has_clean_attack(observation: Dictionary, actor: Dictionary, cell: Vector2i
 			return true
 	return false
 
-func choose_spear_reposition(observation: Dictionary, legal_actions: Array, actor: Dictionary) -> Dictionary:
+func spear_double_target(observation: Dictionary, actor: Dictionary, cell: Vector2i) -> String:
+	for direction in Hex.DIRECTIONS:
+		var hits = observation.units.filter(func(u): return u.alive and u.id != actor.id and Hex.decode(u.position) in [cell+direction,cell+direction*2] and height_allowed(observation,actor,cell,Hex.decode(u.position)))
+		if hits.size() != 2 or hits.any(func(u): return u.team == actor.team):
+			continue
+		if observation.has("focus_target_id"):
+			for hit in hits:
+				if hit.id == observation.focus_target_id:
+					return hit.id
+		else:
+			return hits[0].id
+	return ""
+
+func choose_spear_reposition(observation: Dictionary, legal_actions: Array, actor: Dictionary, double_only: bool = false) -> Dictionary:
 	var d = observation.definitions[actor.archetype]
 	var budget = int(actor.ap)-int(d.cost)
 	if budget < 1:
@@ -231,7 +270,7 @@ func choose_spear_reposition(observation: Dictionary, legal_actions: Array, acto
 		var cell: Vector2i = queue[head]
 		head += 1
 		var route = tree[cell]
-		if cell != start and has_clean_attack(observation,actor,cell):
+		if cell != start and (not spear_double_target(observation,actor,cell).is_empty() if double_only else has_clean_attack(observation,actor,cell)):
 			if route.risk < best_risk or (route.risk == best_risk and route.steps < best_steps):
 				best = moves[route.first]
 				best_risk = route.risk
@@ -241,9 +280,9 @@ func choose_spear_reposition(observation: Dictionary, legal_actions: Array, acto
 		var risk = route.risk
 		for enemy in observation.units:
 			var definition = observation.definitions[enemy.archetype]
-			if enemy.alive and enemy.get("reaction_ready",true) and enemy.team != actor.team and int(definition.zoc) > 0 and Hex.distance(cell,Hex.decode(enemy.position)) <= int(definition.zoc) and height_allowed(observation,enemy,Hex.decode(enemy.position),cell):
+			if enemy.alive and not enemy.get("fleeing",false) and (enemy.get("reaction_ready",true) and not enemy.get("stunned",false)) and enemy.team != actor.team and int(definition.zoc) > 0 and Hex.distance(cell,Hex.decode(enemy.position)) <= int(definition.zoc) and height_allowed(observation,enemy,Hex.decode(enemy.position),cell):
 				risk += int(definition.damage_max)+Traits.damage_bonus(enemy,observation.units)
-		if risk >= int(actor.hp):
+		if risk >= int(actor.hp) or (double_only and risk > 0):
 			continue
 		for direction in Hex.DIRECTIONS:
 			var next: Vector2i = cell+direction
@@ -292,7 +331,7 @@ func choose_guard_move(observation: Dictionary, legal_actions: Array, actor: Dic
 		var risk = info.risk
 		for enemy in observation.units:
 			var radius = int(observation.definitions[enemy.archetype].zoc)
-			if enemy.alive and enemy.get("reaction_ready",true) and enemy.team != actor.team and radius > 0 and Hex.distance(cell,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),cell):
+			if enemy.alive and (enemy.get("reaction_ready",true) and not enemy.get("stunned",false)) and enemy.team != actor.team and radius > 0 and Hex.distance(cell,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),cell):
 				risk += 1
 		for direction in Hex.DIRECTIONS:
 			var next: Vector2i = cell+direction
@@ -334,12 +373,12 @@ func can_climb_to_attack(observation: Dictionary, actor: Dictionary, destination
 	if Hex.distance(start,destination) != 1 or Terrain.height_at(heights,destination) <= Terrain.height_at(heights,start):
 		return false
 	var cost = Terrain.step_cost(heights,start,destination,int(d.move_cost),int(observation.board.width),int(observation.board.height))
-	if cost < 0 or int(actor.ap)-cost < int(d.cost):
+	if cost < 0 or int(actor.ap)-cost < int(d.get("advantage_cost",d.cost)):
 		return false
 	if has_clean_attack(observation,actor,start,true) or not has_clean_attack(observation,actor,destination,true):
 		return false
 	for enemy in observation.units:
-		if enemy.alive and enemy.team != actor.team and enemy.get("reaction_ready",true):
+		if enemy.alive and enemy.team != actor.team and (enemy.get("reaction_ready",true) and not enemy.get("stunned",false)):
 			var radius = int(observation.definitions[enemy.archetype].zoc)
 			if radius > 0 and Hex.distance(start,Hex.decode(enemy.position)) <= radius and height_allowed(observation,enemy,Hex.decode(enemy.position),start):
 				return false

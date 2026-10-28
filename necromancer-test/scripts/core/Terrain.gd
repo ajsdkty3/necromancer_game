@@ -20,4 +20,6 @@ static func center(heights: Dictionary, cell: Vector2i) -> Vector2:
 	return Hex.center(cell) - Vector2(0,height_at(heights,cell)*LIFT)
 
 static func attack_height_allowed(heights: Dictionary, from: Vector2i, to: Vector2i, kind: String) -> bool:
-	return kind == "SHOOT" or absi(height_at(heights,from)-height_at(heights,to)) <= 1
+	if kind == "SHOOT":
+		return height_at(heights,to)-height_at(heights,from)<=2
+	return absi(height_at(heights,from)-height_at(heights,to)) <= 1
