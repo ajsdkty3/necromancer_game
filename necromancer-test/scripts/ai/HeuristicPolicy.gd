@@ -7,6 +7,8 @@ const Advantage = preload("res://scripts/core/AdvantageRules.gd")
 const Knockback = preload("res://scripts/core/KnockbackRules.gd")
 const Charge = preload("res://scripts/core/ChargeRules.gd")
 const Knight = preload("res://scripts/ai/KnightPolicy.gd")
+const Commander = preload("res://scripts/ai/CommanderPolicy.gd")
+const Support = preload("res://scripts/ai/SupportPolicy.gd")
 
 func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 	if legal_actions.is_empty():
@@ -15,9 +17,15 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 	for u in observation.units:
 		if u.id == legal_actions[0].actor_id:
 			actor = u
-	var enemies = observation.units.filter(func(u): return u.alive and u.team != actor.team)
+	var enemies = observation.units.filter(func(u): return u.alive and not u.get("is_corpse",false) and u.team != actor.team)
 	if actor.get("fleeing",false):
 		return legal_actions[0].duplicate(true)
+	if observation.definitions[actor.archetype].kind == "BATTLE_ORDER":
+		return Commander.choose(observation,legal_actions,actor)
+	if observation.definitions[actor.archetype].has("guard_range"):
+		var support = Support.choose(observation,legal_actions,actor,false)
+		if not support.is_empty():
+			return support
 	if observation.has("focus_target_id"):
 		enemies = enemies.filter(func(u): return u.id==observation.focus_target_id)
 	if observation.definitions[actor.archetype].has("charge_range"):
@@ -74,7 +82,7 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 		if action.kind == "GUARD":
 			score = 0.0
 			for ally in observation.units:
-				if not ally.alive or ally.id == actor.id or ally.team != actor.team or ally.get("guarding",false):
+				if not Support.is_recipient(observation,actor,ally) or ally.get("guarding",false):
 					continue
 				if Hex.distance(start,Hex.decode(ally.position)) > guard_range:
 					continue
@@ -119,7 +127,7 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 				score += 3.0 * (Terrain.height_at(observation.board.get("heights",{}),destination)-Terrain.height_at(observation.board.get("heights",{}),start))
 			if guard_range > 0 and not actor.get("guarding",false):
 				for ally in observation.units:
-					if ally.alive and ally.team == actor.team and ally.id != actor.id and not ally.get("guarding",false):
+					if Support.is_recipient(observation,actor,ally) and not ally.get("guarding",false):
 						if Hex.distance(destination,Hex.decode(ally.position)) <= guard_range:
 							score += 1.5
 			for enemy in enemies:
@@ -131,6 +139,8 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 			for u in observation.units:
 				if u.id == action.target_unit_id:
 					target = u
+			if target.get("is_corpse",false):
+				continue
 			var d = observation.definitions[actor.archetype]
 			var hits = [target]
 			if d.target_shape == "spear":
@@ -146,6 +156,8 @@ func choose_action(observation: Dictionary, legal_actions: Array) -> Dictionary:
 			if hits.size() == 1 and target.team != actor.team:
 				single_hp = int(target.hp)
 			for hit in hits:
+				if hit.get("is_corpse",false):
+					continue
 				var guardian = Guard.protector(hit,observation.units,observation.definitions)
 				var receiver = hit if guardian.is_empty() else guardian
 				var bonus = Traits.damage_bonus(actor,observation.units)
@@ -220,7 +232,7 @@ func has_clean_attack(observation: Dictionary, actor: Dictionary, cell: Vector2i
 	for enemy in observation.units:
 		if observation.has("focus_target_id") and enemy.id != observation.focus_target_id:
 			continue
-		if not enemy.alive or enemy.team == actor.team or Hex.distance(cell,Hex.decode(enemy.position)) > int(d.range) or not height_allowed(observation,actor,cell,Hex.decode(enemy.position)):
+		if not enemy.alive or enemy.get("is_corpse",false) or enemy.team == actor.team or Hex.distance(cell,Hex.decode(enemy.position)) > int(d.range) or not height_allowed(observation,actor,cell,Hex.decode(enemy.position)):
 			continue
 		if overhead and not Advantage.qualifies(actor,enemy,cell,heights,observation.units):
 			continue
@@ -239,7 +251,7 @@ func has_clean_attack(observation: Dictionary, actor: Dictionary, cell: Vector2i
 
 func spear_double_target(observation: Dictionary, actor: Dictionary, cell: Vector2i) -> String:
 	for direction in Hex.DIRECTIONS:
-		var hits = observation.units.filter(func(u): return u.alive and u.id != actor.id and Hex.decode(u.position) in [cell+direction,cell+direction*2] and height_allowed(observation,actor,cell,Hex.decode(u.position)))
+		var hits = observation.units.filter(func(u): return u.alive and not u.get("is_corpse",false) and u.id != actor.id and Hex.decode(u.position) in [cell+direction,cell+direction*2] and height_allowed(observation,actor,cell,Hex.decode(u.position)))
 		if hits.size() != 2 or hits.any(func(u): return u.team == actor.team):
 			continue
 		if observation.has("focus_target_id"):
@@ -281,7 +293,7 @@ func choose_spear_reposition(observation: Dictionary, legal_actions: Array, acto
 		for enemy in observation.units:
 			var definition = observation.definitions[enemy.archetype]
 			if enemy.alive and not enemy.get("fleeing",false) and (enemy.get("reaction_ready",true) and not enemy.get("stunned",false)) and enemy.team != actor.team and int(definition.zoc) > 0 and Hex.distance(cell,Hex.decode(enemy.position)) <= int(definition.zoc) and height_allowed(observation,enemy,Hex.decode(enemy.position),cell):
-				risk += int(definition.damage_max)+Traits.damage_bonus(enemy,observation.units)
+				risk += int(definition.get("reaction_damage",definition.damage_max))+Traits.damage_bonus(enemy,observation.units)
 		if risk >= int(actor.hp) or (double_only and risk > 0):
 			continue
 		for direction in Hex.DIRECTIONS:
@@ -305,6 +317,8 @@ func guard_coverage(observation: Dictionary, actor: Dictionary, destination: Vec
 			u.position = Hex.encode(destination)
 	var count = 0
 	for ally in preview:
+		if not Support.is_recipient(observation,actor,ally):
+			continue
 		var guardian = Guard.protector(ally,preview,observation.definitions)
 		if not guardian.is_empty() and guardian.id == actor.id:
 			count += 1
@@ -364,7 +378,7 @@ func choose_guard_move(observation: Dictionary, legal_actions: Array, actor: Dic
 	return best.duplicate(true)
 
 func height_allowed(observation: Dictionary, actor: Dictionary, from: Vector2i, to: Vector2i) -> bool:
-	return Terrain.attack_height_allowed(observation.board.get("heights",{}),from,to,observation.definitions[actor.archetype].kind)
+	return Terrain.attack_height_allowed(observation.board.get("heights",{}),from,to,observation.definitions[actor.archetype].kind,observation.board.get("obstacles",{}))
 
 func can_climb_to_attack(observation: Dictionary, actor: Dictionary, destination: Vector2i) -> bool:
 	var start = Hex.decode(actor.position)

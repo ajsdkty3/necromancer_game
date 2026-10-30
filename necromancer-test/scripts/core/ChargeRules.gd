@@ -7,12 +7,12 @@ static func targets(actor: Dictionary, start: Vector2i, endpoint: Vector2i, boar
 
 static func target_in_direction(start: Vector2i, endpoint: Vector2i, target: Vector2i) -> bool:
 	if start == endpoint:
-		return Hex.distance(start,target)==1
+		return false
 	for index in Hex.DIRECTIONS.size():
 		var direction = Hex.DIRECTIONS[index]
 		for distance in range(1,Hex.distance(start,endpoint)+1):
 			if endpoint==start+direction*distance:
-				return target-endpoint in [direction,Hex.DIRECTIONS[(index+1)%6],Hex.DIRECTIONS[(index+5)%6]]
+				return target-endpoint == direction
 	return false
 
 # Every endpoint has one straight, unobstructed path. No resource or state mutation.

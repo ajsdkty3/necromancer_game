@@ -3,7 +3,7 @@ const Hex = preload("res://scripts/core/HexGrid.gd")
 
 # One recipient per hit. Active guardians cannot themselves be protected.
 static func protector(target: Dictionary, units: Array, definitions: Dictionary) -> Dictionary:
-	if not target.alive or target.get("guarding",false):
+	if not target.alive or target.get("is_corpse",false) or target.get("guarding",false):
 		return {}
 	for guardian in units:
 		if not guardian.alive or guardian.id == target.id or guardian.team != target.team:

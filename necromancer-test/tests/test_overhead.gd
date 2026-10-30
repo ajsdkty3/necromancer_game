@@ -36,7 +36,7 @@ func _init():
 				if id=="vampire":
 					check(damage==6,"kiss deals fixed four damage")
 				elif id=="archer":
-					check(damage==9,"vital shot deals five damage")
+					check(damage==6,"vital shot deals five damage")
 				elif id=="shield":
 					check(damage==1 and e.unit(target).stunned,"strong shield damage and stun")
 				elif id=="zombie_a":
@@ -70,6 +70,6 @@ func _init():
 	check(action.kind=="OVERHEAD_STRIKE","AI prefers double damage at same cost")
 	events = e.execute_action(action)
 	var damage = 100-e.unit("vampire").hp
-	check(damage==10,"human bonus adds to vital shot without doubling")
+	check(damage==7,"human bonus adds to vital shot without doubling")
 	print("OVERHEAD RESULT: %d failures" % failures)
 	quit(1 if failures else 0)

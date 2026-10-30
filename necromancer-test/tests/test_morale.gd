@@ -26,7 +26,8 @@ func _init():
 	var e = Rules.new(42,7)
 	check(not e.unit("vampire").has("morale") and e.humans().all(func(h): return h.morale==100),"humans only start with morale")
 	e.unit("spear_a").position = [0,0]
-	e.unit("spear_b").position = [1,0]
+	# Within death-notification radius, outside the adjacent corpse penalty.
+	e.unit("spear_b").position = [2,0]
 	e.apply_damage("vampire","spear_b",100,"test")
 	check(e.human_deaths==1 and e.unit("spear_a").morale==80,"nearby death permanently costs twenty")
 	e.refresh_morale()

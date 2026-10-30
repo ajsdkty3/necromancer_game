@@ -35,7 +35,7 @@ func _init():
 		var action = {"actor_id":"vampire","kind":special,"target_unit_id":"spear_a"}
 		check(e.validate_action(action).valid,"advantage available on high ground")
 		e.execute_action(action)
-		check(e.unit("spear_a").hp==14-(2 if row[0]=="undead_spearman" else (9 if row[0]=="undead_archer" else 1)),"original special damage")
+		check(e.unit("spear_a").hp==14-(2 if row[0]=="undead_spearman" else (6 if row[0]=="undead_archer" else 1)),"original special damage")
 		e = fixture(row[0])
 		e.attack(e.unit("vampire"),e.unit("spear_a"),true)
 		check(e.unit("spear_a").hp==14-expected_damage,"reaction retains original roll")

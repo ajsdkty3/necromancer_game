@@ -9,6 +9,10 @@ const Knockback = preload("res://scripts/core/KnockbackRules.gd")
 const Morale = preload("res://scripts/core/MoraleRules.gd")
 const FleePaths = preload("res://scripts/core/FleePaths.gd")
 const Charge = preload("res://scripts/core/ChargeRules.gd")
+const RandomEvents = preload("res://scripts/core/RandomEvents.gd")
+var random_event_used = false
+var random_event_kind = ""
+var random_event_checked_round = 0
 var initial_human_count = 0
 var human_deaths = 0
 var heights: Dictionary = {}
@@ -31,9 +35,49 @@ var board_width = 20
 var board_height = 10
 var level_id = 1
 var level_name = ""
+const NECROMANCER_SKILLS = {"SUMMON_ZOMBIE":20,"FLESH_SHAPING":20,"SACRIFICE":0}
+
+func enumerate_necromancer_actions() -> Array:
+	var result: Array = []
+	if faction != "undead" or is_terminal():
+		return result
+	for kind in NECROMANCER_SKILLS:
+		if domination < NECROMANCER_SKILLS[kind]:
+			continue
+		for target in units:
+			if target.alive and (target.get("is_corpse",false) if kind == "SUMMON_ZOMBIE" else target.team == "undead"):
+				result.append({"kind":kind,"target_unit_id":target.id})
+	return result
+
+func execute_necromancer_skill(action: Dictionary):
+	var target = unit(action.target_unit_id)
+	var kind = str(action.kind)
+	domination -= int(NECROMANCER_SKILLS[kind])
+	emit("resource","亡灵法师技能消耗%d支配力，剩余%d/%d" % [NECROMANCER_SKILLS[kind],domination,domination_cap],{"remaining":domination})
+	if kind == "SUMMON_ZOMBIE":
+		var zombie = {"id":"summoned_zombie_%d" % history.size(),"name":"召唤僵尸","team":"undead","archetype":"zombie","position":target.position.duplicate(),"hp":int(target.hp),"max_hp":10,"ap":0,"max_ap":0,"alive":true,"guarding":false,"reaction_ready":true,"stunned":false,"stun_skip_active":false}
+		target.hp = 0
+		resolve_death(target)
+		units.append(zombie)
+		emit("unit_created","亡灵法师召唤僵尸：HP %d/10" % zombie.hp,{"unit":zombie.duplicate(true)})
+	elif kind == "FLESH_SHAPING":
+		target.max_hp += 10
+		target.hp = mini(int(target.max_hp),int(target.hp)+10)
+		emit("heal","血肉塑形：%s 最大生命+10，恢复10生命（%d/%d）" % [target.name,target.hp,target.max_hp],{"unit_id":target.id,"amount":10,"hp":target.hp,"max_hp":target.max_hp})
+	else:
+		var gain = int(target.hp)
+		target.hp = 0
+		emit("damage","献祭 "+target.name,{"source":target.id,"target":target.id,"amount":gain,"hp":0})
+		resolve_death(target)
+		var previous = domination
+		domination = mini(domination_cap,domination+gain)
+		emit("resource","献祭恢复%d支配力（受上限限制实际+%d），魂归主宰独立结算" % [gain,domination-previous],{"gain":domination-previous,"remaining":domination})
+	refresh_morale()
+	check_winner()
 
 func _init(seed_override: int = -1, requested_level: int = 1):
 	definitions = JSON.parse_string(FileAccess.get_file_as_string("res://data/units.json"))
+	definitions["corpse"] = {"name":"尸体","role":"尸体","hp":10,"move_cost":0,"zoc":0,"kind":"NONE","label":"无","range":0,"cost":0,"damage_min":0,"damage_max":0,"target_shape":"single"}
 	setup = JSON.parse_string(FileAccess.get_file_as_string("res://data/battle_setup.json"))
 	var levels: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://data/levels.json"))
 	level_id = requested_level if levels.has(str(requested_level)) else 1
@@ -144,14 +188,18 @@ func is_terminal() -> bool:
 	return winner != ""
 
 func humans() -> Array:
-	return units.filter(func(u): return u.team == "human")
+	var list = units.filter(func(u): return u.team == "human")
+	var ordinary = list.filter(func(u): return not definitions[u.archetype].has("order_range") and not definitions[u.archetype].has("guard_range"))
+	ordinary.append_array(list.filter(func(u): return definitions[u.archetype].has("order_range")))
+	ordinary.append_array(list.filter(func(u): return definitions[u.archetype].has("guard_range")))
+	return ordinary
 
 func active_human() -> String:
 	var list = humans()
 	return list[human_index].id if human_index < list.size() else ""
 
 func can_act(u: Dictionary) -> bool:
-	return not u.is_empty() and u.alive and not is_terminal() and u.team == faction and (faction == "undead" or active_human() == u.id)
+	return not u.is_empty() and u.alive and not u.get("is_corpse",false) and not is_terminal() and u.team == faction and (faction == "undead" or active_human() == u.id)
 
 func get_zone_controllers(cell: Vector2i, mover_team: String) -> Array:
 	var result = []
@@ -164,7 +212,7 @@ func get_zone_controllers(cell: Vector2i, mover_team: String) -> Array:
 # Weighted shortest paths: resource cost first, reaction count second.
 func path_tree(actor_id: String) -> Dictionary:
 	var u = unit(actor_id)
-	if u.is_empty() or not u.alive or u.get("stunned",false):
+	if u.is_empty() or not u.alive or u.get("is_corpse",false) or u.get("stunned",false):
 		return {}
 	var start = pos(u)
 	var budget = resource(u)
@@ -206,7 +254,7 @@ func find_path(actor_id: String, destination: Vector2i) -> Array:
 
 func attack_targets(actor: Dictionary, target: Dictionary) -> Array:
 	var d = definitions[actor.archetype]
-	if not Terrain.attack_height_allowed(heights,pos(actor),pos(target),d.kind):
+	if not Terrain.attack_height_allowed(heights,pos(actor),pos(target),d.kind,obstacles):
 		return []
 	if d.target_shape == "spear":
 		for direction in Hex.DIRECTIONS:
@@ -215,7 +263,7 @@ func attack_targets(actor: Dictionary, target: Dictionary) -> Array:
 					var hits = []
 					for step in [1,2]:
 						var hit = occupant(pos(actor) + direction * step)
-						if not hit.is_empty() and Terrain.attack_height_allowed(heights,pos(actor),pos(hit),d.kind):
+						if not hit.is_empty() and Terrain.attack_height_allowed(heights,pos(actor),pos(hit),d.kind,obstacles):
 							hits.append(hit.id)
 					return hits
 	return [target.id]
@@ -246,12 +294,12 @@ func enumerate_legal_actions(actor_id: String) -> Array:
 				result.append({"actor_id":actor_id,"kind":"CHARGE","target_cell":Hex.encode(cell)})
 		if resource(u)>=int(d.stomp_cost):
 			for target in units:
-				if target.alive and target.id!=u.id and Hex.distance(pos(u),pos(target))<=int(d.stomp_range) and Terrain.attack_height_allowed(heights,pos(u),pos(target),d.kind) and Advantage.qualifies(u,target,pos(u),heights,units):
+				if target.alive and target.id!=u.id and Hex.distance(pos(u),pos(target))<=int(d.stomp_range) and Terrain.attack_height_allowed(heights,pos(u),pos(target),d.kind,obstacles) and Advantage.qualifies(u,target,pos(u),heights,units):
 					result.append({"actor_id":actor_id,"kind":"WAR_STOMP","target_unit_id":target.id})
 	else:
 		for target in units:
-			if target.alive and target.id != actor_id and Hex.distance(pos(u),pos(target)) <= int(d.range) and Terrain.attack_height_allowed(heights,pos(u),pos(target),d.kind):
-				if resource(u)>=int(d.cost):
+			if target.alive and target.id != actor_id and Hex.distance(pos(u),pos(target)) <= int(d.range) and Terrain.attack_height_allowed(heights,pos(u),pos(target),d.kind,obstacles):
+				if d.kind != "BATTLE_ORDER" and resource(u)>=int(d.cost):
 					result.append({"actor_id":actor_id,"kind":d.kind,"target_unit_id":target.id})
 				if d.has("knockback_cost") and resource(u)>=int(d.knockback_cost) and Hex.distance(pos(u),pos(target))<=int(d.knockback_range) and Advantage.qualifies(u,target,pos(u),heights,units):
 					result.append({"actor_id":actor_id,"kind":"KNOCKBACK","target_unit_id":target.id})
@@ -263,10 +311,14 @@ func enumerate_legal_actions(actor_id: String) -> Array:
 				result.append({"actor_id":actor_id,"kind":"TELEPORT","target_cell":Hex.encode(cell)})
 	if d.has("guard_cost") and not u.guarding and resource(u) >= int(d.guard_cost):
 		result.append({"actor_id":actor_id,"kind":"GUARD"})
+	if d.kind == "BATTLE_ORDER" and not u.get("battle_order",false) and resource(u) >= int(d.cost):
+		result.append({"actor_id":actor_id,"kind":"BATTLE_ORDER"})
 	result.append({"actor_id":actor_id,"kind":"END_UNIT" if faction == "human" else "END_TURN"})
 	return result
 
 func validate_action(action: Dictionary) -> Dictionary:
+	if action.get("kind","") in NECROMANCER_SKILLS:
+		return {"valid":action in enumerate_necromancer_actions(),"reason":"非亡灵行动阶段、资源不足或目标非法"}
 	if is_terminal():
 		return {"valid":false,"reason":"战斗已经结束"}
 	if action.get("kind","") == "END_TURN" and faction == "undead":
@@ -285,7 +337,7 @@ func charge_targets(actor: Dictionary, start: Vector2i) -> Array:
 	return Charge.targets(actor,start,pos(actor),board_data(),units)
 
 func resolve_knockback(actor: Dictionary, target: Dictionary):
-	if not target.alive or is_terminal():
+	if not target.alive or target.get("is_corpse",false) or is_terminal():
 		return
 	var landing = Knockback.landing(pos(actor),pos(target),board_data(),units)
 	if landing.blocked:
@@ -320,7 +372,7 @@ func apply_damage(source: String, target_id: String, amount: int, reason: String
 	var bonus = Traits.damage_bonus(unit(source),units) if apply_trait else 0
 	amount = maxi(0,amount+bonus)*multiplier
 	if bonus > 0:
-		emit("damage_bonus","%s 众志成城：相邻%d名人类友军，伤害 %d → %d" % [unit(source).name,bonus,raw_amount,amount],
+		emit("damage_bonus","%s 伤害加成（众志成城/战斗号令）：+%d，伤害 %d → %d" % [unit(source).name,bonus,raw_amount,amount],
 			{"source":source,"target":target_id,"raw_amount":raw_amount,"bonus":bonus,"amount":amount})
 	var guardian = Guard.protector(target,units,definitions)
 	if not guardian.is_empty():
@@ -328,27 +380,44 @@ func apply_damage(source: String, target_id: String, amount: int, reason: String
 			{"source":source,"target":target_id,"guardian_id":guardian.id,"amount":amount})
 		target = guardian
 		target_id = guardian.id
+	if target.get("vulnerable",false) and not target.get("is_corpse",false):
+		amount = ceili(amount * 1.5)
 	target.hp = maxi(0,int(target.hp)-amount)
 	emit("damage","%s → %s：%d 伤害（%s），HP %d" % [unit(source).name,target.name,amount,reason,target.hp],
 		{"source":source,"target":target_id,"amount":amount,"raw_amount":raw_amount,"bonus":bonus,"hp":target.hp})
 	if target.hp == 0:
-		target.alive = false
-		target.guarding = false
-		emit("death",target.name + " 死亡",{"unit_id":target_id,"position":target.position.duplicate()})
-		if target.team == "human":
-			human_deaths += 1
-			for ally in humans():
-				if ally.alive and Hex.distance(pos(ally),pos(target))<=2:
-					ally.morale_base = maxi(0,int(ally.morale_base)-20)
-					emit("morale_loss",ally.name+" 附近友军阵亡，士气损失20",{"unit_id":ally.id,"amount":20})
-		if target.team == "undead":
-			var old_domination = domination
-			domination = mini(domination_cap,domination+5)
-			emit("resource","%s 魂归主宰：恢复%d支配力，当前%d/%d" % [target.name,domination-old_domination,domination,domination_cap],
-				{"actor_id":target.id,"trait":"SOUL_RETURN","gain":domination-old_domination,"remaining":domination})
+		resolve_death(target)
 	refresh_morale()
 	check_winner()
 	return events.slice(begin)
+
+func resolve_death(target: Dictionary):
+	var target_id = str(target.id)
+	target.alive = false
+	target.guarding = false
+	if target.get("is_corpse",false):
+		emit("corpse_destroyed",target.name+" 被破坏",{"unit_id":target_id,"position":target.position.duplicate()})
+		return
+	emit("death",target.name + " 死亡",{"unit_id":target_id,"position":target.position.duplicate()})
+	if target.team == "human":
+		human_deaths += 1
+		for ally in humans():
+			if ally.alive and Hex.distance(pos(ally),pos(target))<=2:
+				ally.morale_base = maxi(0,int(ally.morale_base)-20)
+				emit("morale_loss",ally.name+" 附近友军阵亡，士气损失20",{"unit_id":ally.id,"amount":20})
+	if target.team == "undead":
+		var old_domination = domination
+		domination = mini(domination_cap,domination+5)
+		emit("resource","%s 魂归主宰：恢复%d支配力，当前%d/%d" % [target.name,domination-old_domination,domination,domination_cap],
+			{"actor_id":target.id,"trait":"SOUL_RETURN","gain":domination-old_domination,"remaining":domination})
+	else:
+		create_corpse(target)
+
+func create_corpse(source: Dictionary):
+	var corpse = {"id":source.id+"_corpse","name":source.name+"尸体","team":"neutral","archetype":"corpse","is_corpse":true,"source_unit_id":source.id,
+		"position":source.position.duplicate(),"hp":10,"max_hp":10,"ap":0,"max_ap":0,"alive":true,"guarding":false,"reaction_ready":false,"stunned":false,"stun_skip_active":false}
+	units.append(corpse)
+	emit("corpse_created",source.name+" 留下尸体（10HP）",{"unit":corpse.duplicate(true)})
 
 func check_winner():
 	if is_terminal():
@@ -389,11 +458,17 @@ func attack(actor: Dictionary, target: Dictionary, reaction: bool, overhead: boo
 			continue
 		if overhead and not Advantage.qualifies(actor,unit(target_id),pos(actor),heights,units):
 			continue
-		if overhead and d.has("overhead_damage"):
+		if reaction and d.has("reaction_damage"):
+			apply_damage(actor.id,target_id,int(d.reaction_damage),"借机攻击")
+		elif overhead and d.has("overhead_damage"):
 			apply_damage(actor.id,target_id,int(d.overhead_damage),label)
 		else:
 			apply_damage(actor.id,target_id,rng.randi_range(int(d.damage_min),int(d.damage_max)),"借机攻击" if reaction else label,2 if overhead else 1)
 		if not reaction:
+			if overhead and d.get("advantage_vulnerable",false) and unit(target_id).alive and not unit(target_id).get("is_corpse",false) and not is_terminal():
+				unit(target_id).vulnerable = true
+				unit(target_id).vulnerable_expiry_team = actor.team
+				emit("vulnerable",unit(target_id).name+" 易损：受到伤害+50%（向上取整）",{"unit_id":target_id,"expiry_team":actor.team})
 			if overhead and d.get("advantage_stun",false):
 				apply_stun(unit(target_id))
 			elif not overhead and d.get("ordinary_knockback",false):
@@ -412,6 +487,7 @@ func advance_human():
 		finish_stuns("human")
 		finish_flee_round()
 		faction = "undead"
+		expire_commander_effects("undead")
 		begin_stuns("undead")
 		for u in units:
 			if u.team == "undead" and u.guarding:
@@ -421,6 +497,16 @@ func advance_human():
 		round_number += 1
 		domination = mini(domination_cap,domination+domination_regen)
 		emit("turn","第 %d 轮 · 亡灵回合，支配力 %d/%d" % [round_number,domination,domination_cap])
+		RandomEvents.roll(self)
+
+func expire_commander_effects(team: String):
+	for u in units:
+		if u.get("battle_order",false) and u.team == team:
+			u.battle_order = false
+			emit("order_expired",u.name+" 战斗号令结束",{"unit_id":u.id})
+		if u.get("vulnerable",false) and u.get("vulnerable_expiry_team","") == team:
+			u.vulnerable = false
+			emit("vulnerable_expired",u.name+" 易损结束",{"unit_id":u.id})
 
 func reset_reactions(team: String):
 	for u in units:
@@ -441,7 +527,7 @@ func finish_stuns(team: String):
 			emit("stun_expired",u.name+" 眩晕结束",{"unit_id":u.id})
 
 func apply_stun(target: Dictionary):
-	if target.alive and not is_terminal() and not target.get("stunned",false):
+	if target.alive and not target.get("is_corpse",false) and not is_terminal() and not target.get("stunned",false):
 		target.stunned = true
 		target.stun_skip_active = false
 		emit("stun",target.name+" 眩晕：下个所属阵营回合无法行动",{"unit_id":target.id})
@@ -456,9 +542,12 @@ func execute_action(action: Dictionary) -> Array:
 	refresh_morale()
 	var kind = action.kind
 	var actor = unit(str(action.get("actor_id","")))
-	if kind == "END_TURN":
+	if kind in NECROMANCER_SKILLS:
+		execute_necromancer_skill(action)
+	elif kind == "END_TURN":
 		finish_stuns("undead")
 		faction = "human"
+		expire_commander_effects("human")
 		begin_stuns("human")
 		reset_reactions("human")
 		human_index = 0
@@ -485,12 +574,12 @@ func execute_action(action: Dictionary) -> Array:
 		# Snapshot target IDs before knockbacks so each covered unit is hit once.
 		var hits = charge_targets(actor,Hex.decode(start)).map(func(u): return u.id)
 		if not hits.is_empty() and not is_terminal():
-			emit("attack",actor.name+" 冲锋范围攻击",{"actor_id":actor.id,"target_id":hits[0]})
+			emit("attack",actor.name+" 冲锋攻击",{"actor_id":actor.id,"target_id":hits[0]})
 		for target_id in hits:
 			if is_terminal() or not actor.alive or actor.get("fleeing",false):
 				break
 			var target = unit(target_id)
-			apply_damage(actor.id,target.id,int(d.damage_min),"骑士冲锋")
+			apply_damage(actor.id,target.id,int(d.damage_min),"冲锋")
 			resolve_knockback(actor,target)
 		emit("charge_end",actor.name+" 冲锋结束",{"actor_id":actor.id})
 	elif kind == "WAR_STOMP":
@@ -505,6 +594,10 @@ func execute_action(action: Dictionary) -> Array:
 			var old = actor.position.duplicate()
 			actor.position = Hex.encode(target_cell)
 			emit("move",actor.name+" 践踏跟进",{"actor_id":actor.id,"from":old,"to":actor.position.duplicate(),"forced":true})
+	elif kind == "BATTLE_ORDER":
+		spend(actor,int(definitions[actor.archetype].cost))
+		actor.battle_order = true
+		emit("battle_order",actor.name+" 战斗号令：相邻友军伤害+1，持续至下次己方回合",{"unit_id":actor.id})
 	elif kind == "GUARD":
 		spend(actor,int(definitions[actor.archetype].guard_cost))
 		actor.guarding = true
@@ -572,4 +665,4 @@ func get_observation(_team: String = "") -> Dictionary:
 		"undead_domination":domination,"domination_cap":domination_cap,"domination_regen":domination_regen,
 		"board":{"width":board_width,"height":board_height,"hex_layout":setup.layout,"heights":heights.duplicate(true),"obstacles":obstacles.duplicate(true)},"units":units.duplicate(true),
 		"definitions":definitions.duplicate(true),"zones":zones,"legal_actions":legal_actions,"winner":winner,"active_human":active_human(),
-		"human_index":human_index,"initial_human_count":initial_human_count,"human_deaths":human_deaths,"rng_seed":initial_seed,"rng_state":str(rng.state),"action_history":history.duplicate(true)}
+		"human_index":human_index,"human_turn_order":humans().map(func(u): return u.id),"initial_human_count":initial_human_count,"human_deaths":human_deaths,"rng_seed":initial_seed,"rng_state":str(rng.state),"random_event_used":random_event_used,"random_event_kind":random_event_kind,"random_event_checked_round":random_event_checked_round,"action_history":history.duplicate(true)}

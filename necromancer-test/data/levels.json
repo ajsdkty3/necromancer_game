@@ -290,7 +290,7 @@
     }
   },
   "11": {
-    "name": "第十一关·骑士对决",
+    "name": "第十一关·骑兵对决",
     "terrain": "res://data/terrain_flat.json",
     "unit_ids": [
       "undead_knight",
@@ -328,7 +328,7 @@
     }
   },
   "12": {
-    "name": "第十二关·亡灵骑士与弓兵",
+    "name": "第十二关·亡灵骑兵与弓兵",
     "terrain": "res://data/terrain_charge_obstacles.json",
     "unit_ids": [
       "undead_knight",
@@ -356,7 +356,7 @@
     }
   },
   "13": {
-    "name": "第十三关·僵尸与骑士",
+    "name": "第十三关·僵尸与骑兵",
     "terrain": "res://data/terrain_charge_obstacles.json",
     "unit_ids": [
       "zombie_a",
@@ -382,5 +382,34 @@
         4
       ]
     }
+  },
+  "14": {
+    "name": "第十四关·指挥官之战",
+    "terrain": "res://data/terrain_commander.json",
+    "unit_ids": [
+      "l14_undead_0",
+      "l14_undead_1",
+      "l14_undead_2",
+      "l14_undead_3",
+      "l14_undead_4",
+      "l14_undead_5",
+      "l14_undead_6",
+      "l14_undead_7",
+      "l14_undead_8",
+      "l14_undead_9",
+      "l14_human_0",
+      "l14_human_1",
+      "l14_human_2",
+      "l14_human_3",
+      "l14_human_4",
+      "l14_human_5",
+      "l14_human_6",
+      "l14_human_7",
+      "l14_human_8",
+      "l14_human_9"
+    ],
+    "initial_domination": 60,
+    "domination_cap": 60,
+    "domination_regen": 30
   }
 }

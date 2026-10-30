@@ -5,8 +5,8 @@ const Charge = preload("res://scripts/core/ChargeRules.gd")
 
 static func charge_score(o: Dictionary, actor: Dictionary, start: Vector2i, endpoint: Vector2i) -> float:
 	var hits = Charge.targets(actor,start,endpoint,o.board,o.units)
-	var enemies = hits.filter(func(u): return u.team!=actor.team)
-	var friends = hits.size()-enemies.size()
+	var enemies = hits.filter(func(u): return not u.get("is_corpse",false) and u.team!=actor.team)
+	var friends = hits.filter(func(u): return u.team==actor.team).size()
 	if enemies.size()<=friends:
 		return -INF
 	if o.has("focus_target_id") and not enemies.any(func(u): return u.id==o.focus_target_id):
@@ -47,7 +47,7 @@ static func choose(o: Dictionary, legal: Array, actor: Dictionary) -> Dictionary
 		for enemy in o.units:
 			var ed = o.definitions[enemy.archetype]
 			if enemy.alive and enemy.team!=actor.team and enemy.get("reaction_ready",true) and not enemy.get("stunned",false) and not enemy.get("fleeing",false) and int(ed.zoc)>0 and Hex.distance(cell,Hex.decode(enemy.position))<=int(ed.zoc) and Terrain.attack_height_allowed(o.board.heights,Hex.decode(enemy.position),cell,ed.kind):
-				risk += int(ed.damage_max)
+				risk += int(ed.get("reaction_damage",ed.damage_max))
 		if risk>=int(actor.hp):
 			continue
 		for direction in Hex.DIRECTIONS:
@@ -100,14 +100,14 @@ static func choose_escape_charge(o: Dictionary, legal: Array, actor: Dictionary)
 		if reaction_threat(o,actor,endpoint):
 			continue
 		var hits = Charge.targets(actor,start,endpoint,o.board,o.units)
-		var enemies_hit = hits.filter(func(u): return u.team!=actor.team).size()
-		var friends_hit = hits.size()-enemies_hit
+		var enemies_hit = hits.filter(func(u): return not u.get("is_corpse",false) and u.team!=actor.team).size()
+		var friends_hit = hits.filter(func(u): return u.team==actor.team).size()
 		# Empty ground is a valid escape; do not escape by harming mostly allies.
 		if friends_hit>0 and enemies_hit<=friends_hit:
 			continue
 		var nearest = 999
 		for enemy in o.units:
-			if enemy.alive and enemy.team!=actor.team:
+			if enemy.alive and not enemy.get("is_corpse",false) and enemy.team!=actor.team:
 				nearest = mini(nearest,Hex.distance(endpoint,Hex.decode(enemy.position)))
 		var score = 100.0*(enemies_hit-friends_hit)-nearest
 		if score>best_score:

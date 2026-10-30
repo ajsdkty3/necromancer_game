@@ -9,6 +9,11 @@ func check(value: bool, label: String):
 		printerr("FAIL TRAIT: "+label)
 func fixture():
 	var e = Rules.new(42,2)
+	# Fixed fixture HP isolates trait arithmetic from unit balance changes.
+	for id in {"vampire":15,"zombie_a":8,"zombie_b":8,"spear_a":10,"spear_b":10,"shield":20}:
+		var hp = {"vampire":15,"zombie_a":8,"zombie_b":8,"spear_a":10,"spear_b":10,"shield":20}[id]
+		e.unit(id).hp = hp
+		e.unit(id).max_hp = hp
 	e.unit("vampire").position = [2,3]
 	e.unit("zombie_a").position = [0,0]
 	e.unit("zombie_b").position = [1,0]

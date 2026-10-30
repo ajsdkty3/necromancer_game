@@ -35,7 +35,7 @@ func _init():
 	e.refresh_morale()
 	check(e.unit("spear_a").morale==0 and e.unit("spear_a").fleeing,"full surround plus low HP starts flight")
 	var b = Board.new()
-	check(b.unit_background(e.unit("spear_a"))==Color(1,1,1,0.45),"panicked human uses translucent white background")
+	check(b.unit_background(e.unit("spear_a"))==Color("#132029"),"panicked human keeps normal background; flag replaces white fill")
 	check(b.unit_background(e.unit("vampire"))!=Color(1,1,1,0.45),"undead background unchanged")
 	e.unit("spear_a").fleeing = false
 	e.unit("spear_a").morale = 80

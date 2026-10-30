@@ -16,13 +16,13 @@ func run():
 	scene.engine.unit("knight").position = [6,4]
 	scene.selected = "undead_knight"
 	scene.refresh()
-	check(scene.details.text.contains("精英"),"undead knight is elite")
+	check(scene.details.text.contains("仆役"),"undead knight is servant")
 	scene.actions.get_child(1).pressed.emit()
 	check(scene.mode=="CHARGE" and scene.board.highlighted.has(Vector2i(5,4)),"charge button highlights eligible endpoints")
 	check(scene.board.highlighted.has(Vector2i(5,1)),"endpoint highlighted even without nearby enemy")
 	check(scene.board.charge_path_cells.has(Vector2i(3,4)) and scene.board.charge_path_cells.has(Vector2i(5,4)),"full legal path and endpoint are highlighted")
 	var preview = scene.charge_preview_at(Vector2i(3,4))
-	check(preview.size()==3 and preview.has(Vector2i(6,4)) and preview.has(Vector2i(6,3)) and preview.has(Vector2i(5,5)),"hover intermediate path previews forward three cells")
+	check(preview.size()==1 and preview.has(Vector2i(6,4)),"hover intermediate path previews forward single cell")
 	check(scene.charge_preview_at(Vector2i(5,4))==preview,"endpoint and its path show same attack area")
 	check(scene.charge_preview_at(Vector2i(3,5)).is_empty(),"off-path hover clears attack preview")
 	scene.update_charge_preview(scene.board.get_global_transform_with_canvas()*scene.board.surface_center(Vector2i(3,4)))
@@ -31,7 +31,7 @@ func run():
 	check(scene.board.charge_attack_preview.is_empty(),"cancel clears charge overlay")
 	scene.actions.get_child(1).pressed.emit()
 	scene.try_target(Vector2i(5,4),"CHARGE")
-	check(scene.mode=="DEFAULT" and scene.engine.domination==15 and scene.engine.unit("knight").hp==15,"charge automatically strikes after arrival")
+	check(scene.mode=="DEFAULT" and scene.engine.domination==14 and scene.engine.unit("knight").hp==12,"charge automatically strikes after arrival")
 	check(scene.board.is_playing(),"charge animates movement and attack")
 	scene.board.stop_playback()
 	scene.selected = "knight"
@@ -50,7 +50,7 @@ func run():
 	scene.refresh()
 	var destination = Hex.decode(scene.legal.filter(func(a): return a.kind=="CHARGE" and a.target_cell!=scene.engine.unit("undead_knight").position)[0].target_cell)
 	scene.try_target(destination,"CHARGE")
-	check(scene.mode=="DEFAULT" and scene.engine.domination==15,"charge with no enemies auto-finishes")
+	check(scene.mode=="DEFAULT" and scene.engine.domination==14,"charge with no enemies auto-finishes")
 	scene.board.stop_playback()
 	scene.select_level(12)
 	scene.selected = "undead_knight"

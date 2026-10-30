@@ -40,6 +40,8 @@ func press_key(code: Key):
 func run():
 	var scene = load("res://scenes/Battle.tscn").instantiate()
 	root.add_child(scene)
+	# Warning confirmation is covered separately; retain direct animation checks here.
+	scene.skip_friendly_fire_warning = true
 	check(scene.edge_pan_direction(Vector2(2,450),Vector2(1600,900))==Vector2.RIGHT,"left edge pans view left")
 	check(scene.edge_pan_direction(Vector2(1598,450),Vector2(1600,900))==Vector2.LEFT,"right edge pans view right")
 	check(scene.edge_pan_direction(Vector2(800,2),Vector2(1600,900))==Vector2.DOWN,"top edge pans view up")

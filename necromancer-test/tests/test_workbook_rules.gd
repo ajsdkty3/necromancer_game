@@ -33,7 +33,7 @@ func _init():
 		if archetype=="zombie":
 			check(hits.size()==3 and hits.all(func(v): return v.amount in [2,3,4]),"frenzy three rolls 2-4")
 		else:
-			check(hits.size()==1 and hits[0].amount=={"vampire":6,"undead_archer":9,"undead_shieldman":1}[archetype],"fixed advantage damage "+archetype)
+			check(hits.size()==1 and hits[0].amount=={"vampire":6,"undead_archer":6,"undead_shieldman":1}[archetype],"fixed advantage damage "+archetype)
 		if archetype=="vampire":
 			check(e.unit("vampire").hp==16,"kiss heals six")
 		if archetype=="undead_shieldman":
@@ -76,7 +76,7 @@ func _init():
 		check(not e.validate_action(special).valid,"human special needs six AP "+archetype)
 		human.ap = 6
 		events = e.execute_action(special)
-		check(human.ap==0 and events.any(func(v): return v.type=="damage" and v.amount==(9 if archetype=="archer" else 1)),"human counterpart special damage and cost "+archetype)
+		check(human.ap==0 and events.any(func(v): return v.type=="damage" and v.amount==(6 if archetype=="archer" else 1)),"human counterpart special damage and cost "+archetype)
 		check(e.unit("vampire").stunned==(archetype=="shieldman"),"only strong shield stuns")
 	e = fixture("zombie")
 	e.unit("spear_a").position = [6,4]

@@ -216,7 +216,7 @@
     },
     {
       "id": "knight",
-      "name": "骑士",
+      "name": "骑兵",
       "team": "human",
       "archetype": "knight",
       "offset": [
@@ -226,7 +226,7 @@
     },
     {
       "id": "undead_knight",
-      "name": "亡灵骑士",
+      "name": "亡灵骑兵",
       "team": "undead",
       "archetype": "undead_knight",
       "offset": [
@@ -241,6 +241,206 @@
       "archetype": "archer",
       "offset": [
         17,
+        6
+      ]
+    },
+    {
+      "id": "l14_undead_0",
+      "name": "亡灵骑兵1",
+      "archetype": "undead_knight",
+      "team": "undead",
+      "offset": [
+        2,
+        2
+      ]
+    },
+    {
+      "id": "l14_undead_1",
+      "name": "亡灵矛兵1",
+      "archetype": "undead_spearman",
+      "team": "undead",
+      "offset": [
+        2,
+        3
+      ]
+    },
+    {
+      "id": "l14_undead_2",
+      "name": "亡灵矛兵2",
+      "archetype": "undead_spearman",
+      "team": "undead",
+      "offset": [
+        2,
+        4
+      ]
+    },
+    {
+      "id": "l14_undead_3",
+      "name": "僵尸1",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        2,
+        5
+      ]
+    },
+    {
+      "id": "l14_undead_4",
+      "name": "僵尸2",
+      "archetype": "zombie",
+      "team": "undead",
+      "offset": [
+        2,
+        6
+      ]
+    },
+    {
+      "id": "l14_undead_5",
+      "name": "亡灵指挥官1",
+      "archetype": "undead_commander",
+      "team": "undead",
+      "offset": [
+        3,
+        2
+      ]
+    },
+    {
+      "id": "l14_undead_6",
+      "name": "吸血鬼1",
+      "archetype": "vampire",
+      "team": "undead",
+      "offset": [
+        3,
+        3
+      ]
+    },
+    {
+      "id": "l14_undead_7",
+      "name": "吸血鬼2",
+      "archetype": "vampire",
+      "team": "undead",
+      "offset": [
+        3,
+        4
+      ]
+    },
+    {
+      "id": "l14_undead_8",
+      "name": "亡灵弓兵1",
+      "archetype": "undead_archer",
+      "team": "undead",
+      "offset": [
+        3,
+        5
+      ]
+    },
+    {
+      "id": "l14_undead_9",
+      "name": "亡灵弓兵2",
+      "archetype": "undead_archer",
+      "team": "undead",
+      "offset": [
+        3,
+        6
+      ]
+    },
+    {
+      "id": "l14_human_0",
+      "name": "指挥官1",
+      "archetype": "commander",
+      "team": "human",
+      "offset": [
+        17,
+        2
+      ]
+    },
+    {
+      "id": "l14_human_1",
+      "name": "指挥官2",
+      "archetype": "commander",
+      "team": "human",
+      "offset": [
+        17,
+        3
+      ]
+    },
+    {
+      "id": "l14_human_2",
+      "name": "盾兵1",
+      "archetype": "shieldman",
+      "team": "human",
+      "offset": [
+        17,
+        4
+      ]
+    },
+    {
+      "id": "l14_human_3",
+      "name": "盾兵2",
+      "archetype": "shieldman",
+      "team": "human",
+      "offset": [
+        17,
+        5
+      ]
+    },
+    {
+      "id": "l14_human_4",
+      "name": "矛兵1",
+      "archetype": "spearman",
+      "team": "human",
+      "offset": [
+        17,
+        6
+      ]
+    },
+    {
+      "id": "l14_human_5",
+      "name": "矛兵2",
+      "archetype": "spearman",
+      "team": "human",
+      "offset": [
+        16,
+        2
+      ]
+    },
+    {
+      "id": "l14_human_6",
+      "name": "弓兵1",
+      "archetype": "archer",
+      "team": "human",
+      "offset": [
+        16,
+        3
+      ]
+    },
+    {
+      "id": "l14_human_7",
+      "name": "弓兵2",
+      "archetype": "archer",
+      "team": "human",
+      "offset": [
+        16,
+        4
+      ]
+    },
+    {
+      "id": "l14_human_8",
+      "name": "弓兵3",
+      "archetype": "archer",
+      "team": "human",
+      "offset": [
+        16,
+        5
+      ]
+    },
+    {
+      "id": "l14_human_9",
+      "name": "骑兵1",
+      "archetype": "knight",
+      "team": "human",
+      "offset": [
+        16,
         6
       ]
     }

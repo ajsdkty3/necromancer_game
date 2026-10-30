@@ -19,7 +19,20 @@ static func step_cost(heights: Dictionary, from: Vector2i, to: Vector2i, base: i
 static func center(heights: Dictionary, cell: Vector2i) -> Vector2:
 	return Hex.center(cell) - Vector2(0,height_at(heights,cell)*LIFT)
 
-static func attack_height_allowed(heights: Dictionary, from: Vector2i, to: Vector2i, kind: String) -> bool:
+static func attack_height_allowed(heights: Dictionary, from: Vector2i, to: Vector2i, kind: String, obstacles: Dictionary = {}) -> bool:
 	if kind == "SHOOT":
 		return height_at(heights,to)-height_at(heights,from)<=2
+	if kind == "SPEAR_THRUST":
+		if blocked(obstacles,to):
+			return false
+		if Hex.distance(from,to) == 2:
+			var clear = false
+			# Straight attacks have one intermediate cell. Off-axis targets have
+			# two shortest routes; either unblocked route permits the single hit.
+			for direction in Hex.DIRECTIONS:
+				var middle = from+direction
+				if Hex.distance(middle,to) == 1 and not blocked(obstacles,middle) and height_at(heights,middle) <= height_at(heights,from):
+					clear = true
+			if not clear:
+				return false
 	return absi(height_at(heights,from)-height_at(heights,to)) <= 1

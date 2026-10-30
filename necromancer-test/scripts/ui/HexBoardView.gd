@@ -3,9 +3,32 @@ const Terrain = preload("res://scripts/core/Terrain.gd")
 const Hex = preload("res://scripts/core/HexGrid.gd")
 var observation: Dictionary = {}
 var highlighted: Array = []
+var move_hover_cell = Vector2i(-999,-999)
+
+func set_move_hover(cell: Vector2i):
+	if move_hover_cell != cell:
+		move_hover_cell = cell
+		queue_redraw()
+
+func movement_boundary_edges() -> Array:
+	if targeting not in ["DEFAULT","MOVE"] or highlighted.is_empty() or is_playing():
+		return []
+	var region = highlighted.duplicate()
+	for u in observation.get("units",[]):
+		if u.id == selected_id:
+			region.append(Hex.decode(u.position))
+	return zone_edges(region)
+
+func draw_movement_boundary():
+	for edge in movement_boundary_edges():
+		draw_line(edge[0],edge[1],Color(0.20,0.65,1.0,0.12),9.0,true)
+		draw_line(edge[0],edge[1],Color(0.20,0.65,1.0,0.30),5.0,true)
+		draw_line(edge[0],edge[1],Color("#59bfff"),2.5,true)
 var charge_path_cells: Array = []
 var blocked_charge_cells: Array = []
 var charge_attack_preview: Array = []
+var attack_range_cells: Array = []
+var attack_hover_cells: Array = []
 var danger_cells: Array = []
 var danger_zones: Array = []
 const ZONE_COLOR = Color("#ff354f")
@@ -74,6 +97,7 @@ var targeting = "DEFAULT"
 var font: Font
 signal playback_finished
 var visual_units: Array = []
+var enemy_attack_cells: Array = []
 var pending_events: Array = []
 var effect: Dictionary = {}
 var effect_time = 0.0
@@ -109,15 +133,15 @@ func draw_projectile():
 	draw_line(head-direction*23,head-direction*29+side*4,Color("#d7c5a0"),2.0,true)
 	draw_line(head-direction*23,head-direction*29-side*4,Color("#d7c5a0"),2.0,true)
 
-func guard_zones() -> Array:
+func guard_zones(order: bool = false) -> Array:
 	var result = []
 	if observation.is_empty():
 		return result
 	var displayed_units = visual_units if is_playing() else observation.units
 	for u in displayed_units:
-		if not u.alive or not u.get("guarding",false):
+		if not u.alive or not u.get("battle_order" if order else "guarding",false) or (order and u.get("fleeing",false)):
 			continue
-		var radius = int(observation.definitions[u.archetype].get("guard_range",0))
+		var radius = int(observation.definitions[u.archetype].get("order_range" if order else "guard_range",0))
 		if radius <= 0:
 			continue
 		var center = Hex.decode(u.position)
@@ -128,22 +152,38 @@ func guard_zones() -> Array:
 		result.append({"owner_id":u.id,"center":center,"cells":cells})
 	return result
 
-func draw_guard_boundaries():
+func draw_guard_boundaries(order: bool = false):
 	# Guard is a persistent status, independent of movement/attack selection.
-	for zone in guard_zones():
+	var color = Color("#ffbd45") if order else Color.WHITE
+	for zone in guard_zones(order):
 		var origin = surface_center(zone.center)
 		for edge in zone_edges(zone.cells):
 			# Keep white status contours just inside red opportunity contours.
 			var a: Vector2 = origin+(edge[0]-origin)*0.94
 			var b: Vector2 = origin+(edge[1]-origin)*0.94
-			draw_line(a,b,Color(1,1,1,0.08),9.0,true)
-			draw_line(a,b,Color(1,1,1,0.20),5.0,true)
-			draw_line(a,b,Color.WHITE,2.0,true)
+			draw_line(a,b,Color(color,0.08),9.0,true)
+			draw_line(a,b,Color(color,0.20),5.0,true)
+			draw_line(a,b,color,2.0,true)
+
+func attack_boundary_edges() -> Array:
+	if attack_range_cells.is_empty():
+		return []
+	var region = attack_range_cells.duplicate()
+	for u in observation.units:
+		if u.id==selected_id:
+			region.append(Hex.decode(u.position))
+	return zone_edges(region)
+
+func draw_attack_boundary():
+	for edge in attack_boundary_edges():
+		draw_line(edge[0],edge[1],Color(1.0,0.15,0.22,0.18),6.0,true)
+		draw_line(edge[0],edge[1],Color("#ff5269"),2.5,true)
 
 func is_playing() -> bool:
 	return not visual_units.is_empty()
 
 func stop_playback():
+	enemy_attack_cells.clear()
 	visual_units = []
 	pending_events = []
 	effect = {}
@@ -168,9 +208,20 @@ func advance_effect():
 	while not pending_events.is_empty():
 		var event = pending_events.pop_front()
 		match event.type:
+			"battle_order","order_expired":
+				visual_unit(event.unit_id).battle_order = event.type == "battle_order"
+			"vulnerable","vulnerable_expired":
+				visual_unit(event.unit_id).vulnerable = event.type == "vulnerable"
+			"corpse_created","unit_created":
+				visual_units.append(event.unit.duplicate(true))
+			"corpse_destroyed":
+				visual_unit(event.unit_id).alive = false
 			"heal":
 				visual_unit(event.unit_id).hp = event.hp
+				if event.has("max_hp"):
+					visual_unit(event.unit_id).max_hp = event.max_hp
 			"move":
+				enemy_attack_cells.clear()
 				if visual_unit(event.actor_id).team == "undead" or event.get("forced",false) or event.get("charge",false):
 					effect = event
 					effect_time = 0.0
@@ -189,6 +240,8 @@ func advance_effect():
 				visual_unit(event.unit_id).guarding = false
 			"morale","rally":
 				visual_unit(event.unit_id).morale = event.morale
+				if event.has("max_morale"):
+					visual_unit(event.unit_id).max_morale = event.max_morale
 				if event.type == "rally":
 					visual_unit(event.unit_id).fleeing = false
 			"guard_expired":
@@ -196,6 +249,10 @@ func advance_effect():
 			"stun","stun_expired":
 				visual_unit(event.unit_id).stunned = event.type=="stun"
 			"attack","reaction","damage","protected","guard":
+				if event.type in ["attack","reaction"]:
+					update_enemy_attack_cells(event)
+				elif event.type == "guard":
+					enemy_attack_cells.clear()
 				effect = event
 				effect_time = 0.0
 				effect_duration = 0.24 if event.type == "damage" else 0.22
@@ -211,6 +268,27 @@ func advance_effect():
 				return
 	stop_playback()
 	playback_finished.emit()
+
+func update_enemy_attack_cells(attack_event: Dictionary):
+	enemy_attack_cells.clear()
+	var actor = visual_unit(attack_event.actor_id)
+	if actor.is_empty() or actor.team != "human":
+		return
+	var ids: Array = [attack_event.target_id]
+	# Read the engine's queued results rather than duplicating attack geometry.
+	# Include area hits and protected targets, using positions before knockback.
+	for event in pending_events:
+		if event.type in ["attack","reaction","move","charge_end"]:
+			break
+		if event.type in ["damage","protected"] and event.get("source","") == actor.id:
+			if event.target not in ids:
+				ids.append(event.target)
+	for id in ids:
+		var target = visual_unit(id)
+		if not target.is_empty():
+			var cell = Hex.decode(target.position)
+			if cell not in enemy_attack_cells:
+				enemy_attack_cells.append(cell)
 
 var last_hover_position = Vector2.INF
 
@@ -303,6 +381,8 @@ func unit_is_occluded(u: Dictionary) -> bool:
 func draw_occluded_marker(u: Dictionary):
 	var p = surface_center(Hex.decode(u.position))+unit_offset(u.id)
 	var color = Color("#98ead0") if u.team == "undead" else Color("#ffcc88")
+	if u.get("is_corpse",false):
+		color = Color("#b1b1b1")
 	draw_arc(p,24,0,TAU,40,Color(color,0.28),1.5,true)
 	if u.id == selected_id:
 		draw_arc(p,29,0,TAU,40,Color(Color("#fff3bd"),0.65),2.0,true)
@@ -329,7 +409,10 @@ func _draw():
 		else:
 			draw_unit(item.unit)
 	draw_zone_boundaries()
+	draw_movement_boundary()
 	draw_guard_boundaries()
+	draw_guard_boundaries(true)
+	draw_attack_boundary()
 	for u in display_units():
 		if u.alive and unit_is_occluded(u):
 			draw_occluded_marker(u)
@@ -350,7 +433,7 @@ func draw_terrain_cell(cell: Vector2i):
 			for tier in height:
 				draw_line(a+Vector2(0,(tier+1)*Terrain.LIFT),b+Vector2(0,(tier+1)*Terrain.LIFT),Color("#302c26"),1.0,true)
 	var fill = [Color("#243b35"),Color("#526548"),Color("#7b8457"),Color("#92946b"),Color("#aaa68a"),Color("#c4bfaa")][mini(height,5)]
-	if cell in highlighted:
+	if cell in highlighted and attack_range_cells.is_empty() and (targeting not in ["DEFAULT","MOVE"] or cell==move_hover_cell):
 		fill = Color("#315965").lightened(height*0.10) if targeting in ["DEFAULT","MOVE","CHARGE"] else Color("#74483e").lightened(height*0.08)
 		if targeting == "TELEPORT":
 			fill = Color("#74483e")
@@ -370,6 +453,11 @@ func draw_terrain_cell(cell: Vector2i):
 		draw_colored_polygon(points,ZONE_FILL)
 	points.append(points[0])
 	draw_polyline(points,Color("#879575") if height > 0 else Color("#47615a"),1.0,true)
+	if cell in attack_hover_cells:
+		draw_colored_polygon(points,Color(1.0,0.12,0.20,0.48))
+	if cell in enemy_attack_cells:
+		draw_colored_polygon(points,Color(1.0,0.08,0.12,0.52))
+		draw_polyline(points,Color("#ff5269"),2.5,true)
 	if height > 0:
 		draw_string(font,center+Vector2(15,-16),str(height),HORIZONTAL_ALIGNMENT_LEFT,-1,11,Color("#e6e4ba"))
 
@@ -388,6 +476,8 @@ func draw_obstacle(cell: Vector2i):
 func draw_unit(u: Dictionary):
 	var p = surface_center(Hex.decode(u.position)) + unit_offset(u.id)
 	var color = Color("#98ead0") if u.team == "undead" else Color("#ffcc88")
+	if u.get("is_corpse",false):
+		color = Color("#b1b1b1")
 	var hit = not effect.is_empty() and effect.type == "damage" and effect.target == u.id
 	var protected_hit = not effect.is_empty() and effect.type == "protected" and effect.target == u.id
 	if hit:
@@ -401,6 +491,11 @@ func draw_unit(u: Dictionary):
 	if u.get("guarding",false):
 		draw_arc(p,27,0,TAU,40,Color("#dceeff"),2.0,true)
 		draw_string(font,p+Vector2(-14,-31),"守护",HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#dceeff"))
+	if u.get("battle_order",false) and not u.get("fleeing",false):
+		draw_arc(p,27,0,TAU,40,Color("#ffbd45"),2.0,true)
+		draw_string(font,p+Vector2(-14,-31),"号令",HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#ffbd45"))
+	if u.get("vulnerable",false):
+		draw_string(font,p+Vector2(-14,35),"易损",HORIZONTAL_ALIGNMENT_LEFT,-1,12,Color("#f19aff"))
 	if protected_hit:
 		var progress = clampf(effect_time/effect_duration,0.0,1.0)
 		var flash = sin(clampf((progress-0.3)/0.7,0.0,1.0)*PI)
@@ -416,11 +511,20 @@ func draw_unit(u: Dictionary):
 	draw_string(font,p+Vector2(-width/2,-1),u.name,HORIZONTAL_ALIGNMENT_LEFT,-1,15,color)
 	var hp = "%d/%d" % [u.hp,u.max_hp]
 	width = font.get_string_size(hp,HORIZONTAL_ALIGNMENT_LEFT,-1,13).x
-	draw_string(font,p+Vector2(-width/2,17),hp,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color.WHITE)
+	draw_string(font,p+Vector2(-width/2,17),hp,HORIZONTAL_ALIGNMENT_LEFT,-1,13,Color("#b1b1b1") if u.get("is_corpse",false) else Color.WHITE)
+	if u.team == "human" and (u.get("fleeing",false) or int(u.get("morale",100)) == 0):
+		draw_flee_flag(p+Vector2(17,-31))
 
-func unit_background(u: Dictionary, hit: bool = false) -> Color:
-	if u.team == "human" and (u.get("fleeing",false) or int(u.get("morale",100))==0):
-		return Color(1,1,1,0.45)
+func draw_flee_flag(origin: Vector2):
+	# Dark outline keeps the small white pennant visible on pale high ground.
+	draw_line(origin,origin+Vector2(0,23),Color("#132029"),4.0,true)
+	draw_line(origin,origin+Vector2(0,23),Color("#eeeeee"),2.0,true)
+	var cloth = PackedVector2Array([origin,origin+Vector2(14,2),origin+Vector2(11,7),origin+Vector2(14,12),origin+Vector2(0,10)])
+	draw_colored_polygon(cloth,Color("#ffffff"))
+	cloth.append(cloth[0])
+	draw_polyline(cloth,Color("#26343c"),1.2,true)
+
+func unit_background(_u: Dictionary, hit: bool = false) -> Color:
 	return Color("#702b35") if hit else Color("#132029")
 
 func board_cells() -> Array:

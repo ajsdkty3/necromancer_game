@@ -7,6 +7,9 @@ const AI = preload("res://scripts/ai/AIController.gd")
 const Traits = preload("res://scripts/core/FactionTraits.gd")
 const Charge = preload("res://scripts/core/ChargeRules.gd")
 const Terrain = preload("res://scripts/core/Terrain.gd")
+const Advantage = preload("res://scripts/core/AdvantageRules.gd")
+const Morale = preload("res://scripts/core/MoraleRules.gd")
+const TARGETED_ATTACKS = ["MELEE_ATTACK","BITE","SPEAR_THRUST","SHOOT","SHIELD_BASH","OVERHEAD_STRIKE","KNOCKBACK","WAR_STOMP"]
 const AI_MOVE_DELAY = 0.10
 const AI_ACTION_DELAY = 0.38
 const EDGE_PAN_MARGIN = 24.0
@@ -31,9 +34,20 @@ var font: SystemFont
 var hint: Label
 var current_level = 1
 var level_menu: MenuButton
+var necromancer_menu: MenuButton
+const SPELL_KINDS = ["SUMMON_ZOMBIE","FLESH_SHAPING","SACRIFICE"]
+const SPELL_LABELS = ["1. 召唤僵尸 · 20支配力","2. 血肉塑形 · 20支配力","3. 献祭 · 0支配力"]
+const SPELL_DESCRIPTIONS = ["摧毁尸体，原地召唤僵尸。\n当前生命继承尸体，最大生命10。","友方亡灵最大生命+10，恢复10血。","杀死一个友方亡灵。\n按其死亡前当前生命值，\n等量恢复支配力（1血=1支配力）。\n魂归主宰独立额外恢复5支配力。\n例如：献祭10血单位共恢复15点。\n恢复不能超过支配力上限。"]
 var move_hint: Label
 var move_preview: Dictionary = {}
 var map_bounds = Rect2()
+var friendly_fire_dialog: ConfirmationDialog
+var friendly_fire_opt_out: CheckBox
+var pending_friendly_action: Dictionary = {}
+var skip_friendly_fire_warning = false
+var settings_path = "user://preferences.cfg"
+var random_event_dialog: AcceptDialog
+var pending_random_event = ""
 const CAMERA_EDGE_PADDING = 40.0
 
 func _ready():
@@ -62,7 +76,35 @@ func _ready():
 	theme.default_font = font
 	theme.default_font_size = 16
 	root.theme = theme
+	random_event_dialog = AcceptDialog.new()
+	random_event_dialog.title = "随机事件"
+	random_event_dialog.ok_button_text = "继续战斗"
+	random_event_dialog.exclusive = true
+	random_event_dialog.min_size = Vector2i(560,220)
+	root.add_child(random_event_dialog)
+	random_event_dialog.confirmed.connect(dismiss_random_event)
+	random_event_dialog.canceled.connect(dismiss_random_event)
 	canvas.add_child(root)
+	var preferences = ConfigFile.new()
+	if preferences.load(settings_path)==OK:
+		skip_friendly_fire_warning = bool(preferences.get_value("combat","skip_friendly_fire_warning",false))
+	friendly_fire_dialog = ConfirmationDialog.new()
+	friendly_fire_dialog.title = "友军伤害警告"
+	friendly_fire_dialog.ok_button_text = "仍然攻击"
+	friendly_fire_dialog.cancel_button_text = "取消"
+	friendly_fire_dialog.exclusive = true
+	friendly_fire_dialog.min_size = Vector2i(460,200)
+	root.add_child(friendly_fire_dialog)
+	friendly_fire_opt_out = CheckBox.new()
+	friendly_fire_opt_out.text = "以后不再显示友伤警告"
+	friendly_fire_dialog.add_child(friendly_fire_opt_out)
+	friendly_fire_opt_out.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	friendly_fire_opt_out.offset_top = -80
+	friendly_fire_opt_out.offset_bottom = -45
+	friendly_fire_opt_out.offset_left = 16
+	friendly_fire_opt_out.offset_right = -16
+	friendly_fire_dialog.confirmed.connect(confirm_friendly_fire)
+	friendly_fire_dialog.canceled.connect(cancel_friendly_fire)
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	level_menu = MenuButton.new()
 	root.add_child(level_menu)
@@ -77,6 +119,17 @@ func _ready():
 	level_menu.get_popup().add_separator()
 	level_menu.get_popup().add_item("重新开始",100)
 	level_menu.get_popup().id_pressed.connect(select_level)
+	necromancer_menu = MenuButton.new()
+	root.add_child(necromancer_menu)
+	necromancer_menu.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	necromancer_menu.offset_left = -140
+	necromancer_menu.offset_right = 140
+	necromancer_menu.offset_top = 64
+	necromancer_menu.offset_bottom = 104
+	for i in SPELL_KINDS.size():
+		necromancer_menu.get_popup().add_item(SPELL_LABELS[i],i)
+		necromancer_menu.get_popup().set_item_tooltip(i,SPELL_DESCRIPTIONS[i])
+	necromancer_menu.get_popup().id_pressed.connect(select_necromancer_skill)
 	var log_panel = panel(root,Vector2(16,16),Vector2(310,305))
 	var log_box = VBoxContainer.new()
 	log_panel.add_child(log_box)
@@ -175,6 +228,13 @@ func refresh():
 		mode = "DEFAULT"
 		u = {}
 	legal = engine.enumerate_legal_actions(selected) if not selected.is_empty() else []
+	var spell_actions = engine.enumerate_necromancer_actions()
+	if mode in SPELL_KINDS:
+		legal = spell_actions
+	necromancer_menu.text = "亡灵法师技能 ▾"
+	necromancer_menu.disabled = board.is_playing() or observation.current_faction != "undead" or observation.winner != ""
+	for i in SPELL_KINDS.size():
+		necromancer_menu.get_popup().set_item_disabled(i,not spell_actions.any(func(a): return a.kind == SPELL_KINDS[i]))
 	move_preview = engine.path_tree(selected) if not u.is_empty() and u.alive else {}
 	move_hint.visible = false
 	board.observation = observation
@@ -183,9 +243,12 @@ func refresh():
 	board.selected_id = selected
 	board.targeting = mode
 	board.highlighted = []
+	board.set_move_hover(Vector2i(-999,-999))
 	board.charge_path_cells = []
 	board.blocked_charge_cells = []
 	board.charge_attack_preview = []
+	board.attack_range_cells = []
+	board.attack_hover_cells = []
 	board.danger_cells = []
 	board.danger_zones = []
 	var zone_owners = []
@@ -229,6 +292,13 @@ func refresh():
 			for path_cell in charge_paths.get(endpoint,[]):
 				if path_cell not in board.charge_path_cells:
 					board.charge_path_cells.append(path_cell)
+	if mode in TARGETED_ATTACKS and not u.is_empty() and u.team=="undead" and observation.current_faction=="undead" and observation.winner=="" and not board.is_playing():
+		var origin = Hex.decode(u.position)
+		var definition = observation.definitions[u.archetype]
+		var radius = int(definition.get("knockback_range",1)) if mode=="KNOCKBACK" else (int(definition.get("stomp_range",1)) if mode=="WAR_STOMP" else int(definition.range))
+		for cell in Hex.cells(int(observation.board.width),int(observation.board.height)):
+			if cell!=origin and Hex.distance(origin,cell)<=radius and Terrain.attack_height_allowed(observation.board.heights,origin,cell,definition.kind,observation.board.get("obstacles",{})):
+				board.attack_range_cells.append(cell)
 	board.queue_redraw()
 	update_charge_preview()
 	level_menu.text = "菜单 · %s ▾" % observation.level_name
@@ -236,40 +306,54 @@ func refresh():
 		if level_menu.get_popup().is_item_radio_checkable(index):
 			level_menu.get_popup().set_item_checked(index,level_menu.get_popup().get_item_id(index) == current_level)
 	var human_total = observation.units.filter(func(unit): return unit.team == "human").size()
-	status.text = "第 %d 轮 · %s\n支配力 %d / %d\n人类进度 %d / %d" % [observation.round,
+	status.text = "第 %d 轮 · %s\n支配力 %d / %d（每回合+%d）\n人类进度 %d / %d" % [observation.round,
 		"亡灵回合" if observation.current_faction == "undead" else "人类回合",
-		observation.undead_domination,observation.domination_cap,mini(human_total,observation.human_index),human_total]
+		observation.undead_domination,observation.domination_cap,observation.domination_regen,mini(human_total,observation.human_index),human_total]
 	end_button.disabled = observation.current_faction != "undead" or observation.winner != "" or board.is_playing()
 	for child in actions.get_children():
 		actions.remove_child(child)
 		child.queue_free()
 	if u.is_empty():
 		details.text = "单位详情\n\n左键选择单位\n绿色：亡灵  ·  金色：人类"
+		if mode in SPELL_KINDS:
+			details.text = SPELL_LABELS[SPELL_KINDS.find(mode)]+"\n"+SPELL_DESCRIPTIONS[SPELL_KINDS.find(mode)]+"\n左键选择高亮目标\n使用次数不限。\nEsc取消选择。"
+	elif u.get("is_corpse",false):
+		details.text = "%s\nHP %d / %d\n占据格子，可攻击破坏。\n无法行动，不受守护、眩晕、击退等效果。" % [u.name,u.hp,u.max_hp]
 	else:
 		var d = observation.definitions[u.archetype]
-		var resource_text = "全队支配力 %d/%d" % [observation.undead_domination,observation.domination_cap] if u.team == "undead" else "AP %d/%d" % [u.ap,u.max_ap]
+		var resource_text = "全队支配力 %d/%d（每回合+%d）" % [observation.undead_domination,observation.domination_cap,observation.domination_regen] if u.team == "undead" else "AP %d/%d" % [u.ap,u.max_ap]
 		details.text = "%s · %s\n阵营：%s\nHP %d / %d\n%s" % [u.name,d.role,"亡灵" if u.team == "undead" else "人类",u.hp,u.max_hp,resource_text]
 		details.text += "\n魂归主宰：死亡恢复5支配力" if u.team == "undead" else "\n众志成城：每相邻人类友军伤害+1"
 		if int(d.zoc) > 0:
 			details.text += "\n借机攻击：%s / 1（己方回合开始恢复）" % ("1" if u.reaction_ready else "0")
 		if u.get("guarding",false):
 			details.text += "\n守护中：至下次所属阵营回合开始"
+		if u.get("battle_order",false):
+			details.text += "\n战斗号令：相邻友军伤害+1（不叠加）"
+		if u.get("vulnerable",false):
+			details.text += "\n易损：所受伤害+50%，向上取整"
 		if u.get("stunned",false):
 			details.text += "\n眩晕：本回合无法行动" if u.get("stun_skip_active",false) else "\n眩晕：下个所属阵营回合无法行动"
 		if mode == "CHARGE":
-			details.text += "\n直线冲锋3格，移动不触发借机攻击\n到达自动攻击前方3格，含友伤并击退"
+			details.text += "\n直线冲锋3格，移动不触发借机攻击\n到达自动攻击正前方1格，含友伤并击退"
 		if u.team == "human":
-			details.text += "\n士气：%d / 100" % u.get("morale",100)
+			details.text += "\n士气：%d / %d" % [u.get("morale",100),u.get("max_morale",100)]
 			if u.get("fleeing",false):
 				if u.get("flee_trapped",false):
 					details.text += "\n完全被围：无法移动或恢复士气\n解除后重新溃逃2回合"
 				else:
 					details.text += " · 溃逃剩余%d回合" % maxi(0,int(u.flee_until_round)-int(observation.round)+1)
+			var corpses = Morale.adjacent_corpses(u,observation.units)
+			if corpses > 0:
+				details.text += "\n相邻尸体%d具：士气-%d" % [corpses,corpses*20]
 		add_action("MOVE","移动：同高%d %s · 跨级+1" % [d.move_cost,"支配力" if u.team == "undead" else "AP"])
 		var damage_text = str(int(d.damage_min)) if d.damage_min == d.damage_max else "%d–%d" % [d.damage_min,d.damage_max]
-		add_action(d.kind,"%s：%d点 · %s · 伤害%s" % [d.label,d.cost,"直线冲锋恰好%d格" % d.charge_range if d.kind=="CHARGE" else "范围%d" % d.range,damage_text])
+		if d.kind == "BATTLE_ORDER":
+			add_action(d.kind,"战斗号令：%d点 · 相邻6格友军伤害+1\n不含自己，不叠加，持续至下次己方回合" % d.cost)
+		else:
+			add_action(d.kind,"%s：%d点 · %s · 伤害%s" % [d.label,d.cost,"直线冲锋恰好%d格" % d.charge_range if d.kind=="CHARGE" else "范围%d" % d.range,damage_text])
 		if d.kind=="CHARGE":
-			actions.get_child(actions.get_child_count()-1).text += "\n前方3格含友伤 · 击退1格\n冲锋移动不触发借机攻击"
+			actions.get_child(actions.get_child_count()-1).text += "\n正前方1格含友伤 · 击退1格\n冲锋移动不触发借机攻击"
 		if d.get("ordinary_knockback",false):
 			actions.get_child(actions.get_child_count()-1).text += "\n击退1格；受阻不位移，下降另算坠落伤害"
 		if d.kind=="SHOOT":
@@ -293,6 +377,8 @@ func refresh():
 				add_action("OVERHEAD_STRIKE","优势动作·%s：%d点\n伤害%s · 范围%d · 高处或包围目标" % [d.get("advantage_label","当头猛击"),d.get("advantage_cost",d.cost),heavy_damage,d.range])
 		if d.get("advantage_stun",false):
 			actions.get_child(actions.get_child_count()-1).text += "\n眩晕：下个所属阵营回合无法行动，不叠加"
+		if d.get("advantage_vulnerable",false):
+			actions.get_child(actions.get_child_count()-1).text += "\n易损：伤害+50%向上取整\n持续至施放者下次己方回合，不叠加"
 		if d.has("teleport_range"):
 			add_action("TELEPORT","瞬移：%d支配力 · 范围%d" % [d.teleport_cost,d.teleport_range])
 		var cancel = Button.new()
@@ -300,21 +386,47 @@ func refresh():
 		cancel.disabled = board.is_playing()
 		cancel.pressed.connect(cancel_action)
 		actions.add_child(cancel)
-	result_panel.visible = observation.winner != "" and not board.is_playing()
+	result_panel.visible = observation.winner != "" and not board.is_playing() and pending_random_event.is_empty()
 	result_label.text = "胜利 · 人类全灭" if observation.winner == "undead" else "失败 · 亡灵全灭"
+	if not pending_random_event.is_empty() and not board.is_playing() and not random_event_dialog.visible:
+		random_event_dialog.dialog_text = pending_random_event
+		random_event_dialog.popup_centered()
+
+func queue_random_event(events: Array):
+	var found = false
+	var lines: PackedStringArray = []
+	for event in events:
+		if event.type == "random_event":
+			found = true
+			lines.append({"REINFORCEMENTS":"右侧边缘出现1名人类骑兵增援。","AWAKENING":"一名亡灵周围的空格生成1只己方僵尸。","SOUL_RAMPAGE":"一名亡灵立即阵亡；最大支配力+20，恢复20支配力。\n魂归主宰另行结算。","BACKLASH":"本回合剩余支配力立即清零。","SURGE":"本场战斗最大支配力+10，并恢复10支配力。"}.get(event.kind,""))
+		if found and event.has("message"):
+			# Morale changes are summarized, keeping the popup readable in large battles.
+			if event.type not in ["rally","morale","damage_bonus"]:
+				lines.append(event.message)
+	if found:
+		if events.any(func(e): return e.type == "random_event" and e.kind == "REINFORCEMENTS"):
+			lines.append("所有存活人类：当前士气+20、最大士气+20；停止溃逃。")
+		pending_random_event = "\n\n".join(lines)
+
+func dismiss_random_event():
+	pending_random_event = ""
+	random_event_dialog.hide()
+	refresh()
 
 func add_action(kind: String, label: String):
 	var button = Button.new()
 	if kind in ["KNOCKBACK","OVERHEAD_STRIKE","WAR_STOMP"]:
 		button.tooltip_text = "优势动作：自身高于目标，或敌方目标相邻六格内有至少3名存活己方单位（包括行动者）。\n仍需满足范围、资源和近战高度差不超过1级的限制。"
 	if kind == "MOVE":
-		button.tooltip_text = "蓝色底色：可达格；半透明红色与红边：敌方借机攻击范围，重叠处红色更深。\n走入不触发，从红色区域继续移动或离开时触发。"
+		button.tooltip_text = "蓝色高光边界：可达范围；蓝色底色：鼠标悬停的可达目的格；半透明红色与红边：敌方借机攻击范围，重叠处红色更深。\n走入不触发，从红色区域继续移动或离开时触发。"
 	if kind == "CHARGE":
-		button.tooltip_text = "消耗5点，直线移动恰好3格；冲锋移动不触发借机攻击。\n到达自动攻击正前方、左右前方3格中的所有单位（含友军），每个目标基础5伤害并向远离骑士方向击退1格。\n后方障碍、单位、更高地形或越界会阻止击退；伤害照常结算。向下击退另结算每级2点坠落伤害。"
+		button.tooltip_text = "消耗6点，直线移动恰好3格；冲锋移动不触发借机攻击。\n到达自动攻击正前方、左右正前方1格中的所有单位（含友军），基础4点单体伤害并向远离骑兵方向击退1格。\n后方障碍、单位、更高地形或越界会阻止击退；伤害照常结算。向下击退另结算每级2点坠落伤害。"
 	var available = legal.any(func(a): return a.kind == kind)
 	var reason = ""
 	if not available:
 		reason = "（无合法目标 / 资源不足）"
+		if kind in ["KNOCKBACK","OVERHEAD_STRIKE","WAR_STOMP"]:
+			reason = "（无满足优势条件的合法目标 / 资源不足）"
 		var u = selected_unit()
 		if observation.winner != "":
 			reason = "（战斗已结束）"
@@ -327,18 +439,86 @@ func add_action(kind: String, label: String):
 	button.text = "[%d] %s" % [actions.get_child_count() + 1,label] + ("\n" + reason if reason != "" else "")
 	button.disabled = not available or observation.current_faction != "undead" or board.is_playing()
 	button.pressed.connect(func():
-		if kind == "GUARD":
-			perform({"actor_id":selected,"kind":"GUARD"})
+		if button.disabled:
+			return
+		if kind in ["GUARD","BATTLE_ORDER"]:
+			perform({"actor_id":selected,"kind":kind})
 		else:
 			mode = kind
 			refresh())
 	actions.add_child(button)
 
 func perform(action: Dictionary):
-	if board.is_playing() or observation.winner != "" or observation.current_faction != "undead":
+	if not pending_random_event.is_empty():
+		return
+	if board.is_playing() or not pending_friendly_action.is_empty() or observation.winner != "" or observation.current_faction != "undead":
+		return
+	if not skip_friendly_fire_warning:
+		var friends = friendly_fire_targets(action)
+		if not friends.is_empty():
+			pending_friendly_action = action.duplicate(true)
+			friendly_fire_opt_out.button_pressed = false
+			friendly_fire_dialog.dialog_text = "本次攻击会伤害友军：%s。\n是否仍然执行？" % "、".join(friends)
+			friendly_fire_dialog.popup_centered()
+			return
+	execute_player_action(action)
+
+func select_necromancer_skill(index: int):
+	if not pending_random_event.is_empty():
+		return
+	if board.is_playing() or not pending_friendly_action.is_empty() or index < 0 or index >= SPELL_KINDS.size():
+		return
+	var kind = SPELL_KINDS[index]
+	if not engine.enumerate_necromancer_actions().any(func(a): return a.kind == kind):
+		return
+	selected = ""
+	mode = kind
+	necromancer_menu.get_popup().hide()
+	refresh()
+
+func friendly_fire_targets(action: Dictionary) -> Array:
+	if not engine.validate_action(action).valid:
+		return []
+	var actor = engine.unit(str(action.get("actor_id","")))
+	var targets = []
+	if action.kind=="CHARGE":
+		targets = Charge.targets(actor,Hex.decode(actor.position),Hex.decode(action.target_cell),observation.board,observation.units)
+	elif action.kind in TARGETED_ATTACKS:
+		var target = engine.unit(action.target_unit_id)
+		var ids = engine.attack_targets(actor,target) if action.kind=="SPEAR_THRUST" else [target.id]
+		for id in ids:
+			targets.append(engine.unit(id))
+	var names = []
+	for target in targets:
+		if target.alive and target.team==actor.team and target.id!=actor.id:
+			names.append(target.name)
+	return names
+
+func confirm_friendly_fire():
+	var action = pending_friendly_action.duplicate(true)
+	pending_friendly_action.clear()
+	friendly_fire_dialog.hide()
+	if action.is_empty():
+		return
+	if friendly_fire_opt_out.button_pressed:
+		skip_friendly_fire_warning = true
+		var preferences = ConfigFile.new()
+		preferences.load(settings_path)
+		preferences.set_value("combat","skip_friendly_fire_warning",true)
+		preferences.save(settings_path)
+	if not board.is_playing() and engine.validate_action(action).valid:
+		execute_player_action(action)
+
+func cancel_friendly_fire():
+	pending_friendly_action.clear()
+	friendly_fire_dialog.hide()
+
+func execute_player_action(action: Dictionary):
+	if not pending_random_event.is_empty():
 		return
 	var previous = observation.current_faction
 	var events = engine.execute_action(action)
+	queue_random_event(events)
 	board.play_events(events,observation)
 	for event in events:
 		append_log(event.message)
@@ -349,7 +529,7 @@ func perform(action: Dictionary):
 	refresh()
 
 func cancel_action():
-	if board.is_playing():
+	if board.is_playing() or not pending_friendly_action.is_empty():
 		return
 	mode = "DEFAULT"
 	refresh()
@@ -363,6 +543,9 @@ func select_level(id: int):
 	restart_battle()
 
 func restart_battle():
+	pending_random_event = ""
+	random_event_dialog.hide()
+	cancel_friendly_fire()
 	board.stop_playback()
 	engine = Rules.new(-1,current_level)
 	selected = ""
@@ -380,6 +563,8 @@ func restart_battle():
 		clamp_board_position()
 
 func _process(delta: float):
+	if not pending_random_event.is_empty():
+		return
 	var direction = Vector2.ZERO
 	if Input.is_physical_key_pressed(KEY_W):
 		direction.y += 1
@@ -412,6 +597,7 @@ func _process(delta: float):
 		append_log("AI 集火：%s · 价值%d · 预计剩余输出%d / 目标HP%d" % [engine.unit(ai.focus_plan.target_id).name,ai.focus_plan.value,ai.focus_plan.damage,ai.focus_plan.hp])
 	var old_faction = observation.current_faction
 	var events = engine.execute_action(action)
+	queue_random_event(events)
 	board.play_events(events,observation)
 	for event in events:
 		append_log(event.message)
@@ -493,9 +679,11 @@ func update_move_hint(pointer: Vector2 = get_viewport().get_mouse_position()):
 		return
 	move_hint.visible = false
 	if get_viewport().gui_get_hovered_control() != null or level_menu.get_popup().visible:
+		board.set_move_hover(Vector2i(-999,-999))
 		return
 	var cell = board.cell_at_point(board.get_global_transform_with_canvas().affine_inverse()*pointer)
 	var text = movement_hint_at(cell)
+	board.set_move_hover(cell if not text.is_empty() and cell in board.highlighted and mode in ["DEFAULT","MOVE"] else Vector2i(-999,-999))
 	if text.is_empty():
 		return
 	move_hint.text = text
@@ -504,6 +692,10 @@ func update_move_hint(pointer: Vector2 = get_viewport().get_mouse_position()):
 	move_hint.visible = true
 
 func _unhandled_input(event: InputEvent):
+	if not pending_random_event.is_empty():
+		return
+	if not pending_friendly_action.is_empty():
+		return
 	if event is InputEventKey and event.pressed and not event.echo and not event.ctrl_pressed and not event.alt_pressed and not event.meta_pressed and not event.shift_pressed:
 		var index = -1
 		if event.keycode >= KEY_1 and event.keycode <= KEY_9:
@@ -588,6 +780,38 @@ func update_charge_preview(pointer: Vector2 = Vector2.INF):
 	if board.charge_attack_preview!=preview:
 		board.charge_attack_preview = preview
 		board.queue_redraw()
+	var spear_preview = []
+	if mode in TARGETED_ATTACKS and get_viewport().gui_get_hovered_control()==null and not level_menu.get_popup().visible:
+		var local = board.get_global_transform_with_canvas().affine_inverse()*pointer
+		spear_preview = attack_preview_at(board.cell_at_point(local))
+	if board.attack_hover_cells!=spear_preview:
+		board.attack_hover_cells = spear_preview
+		board.queue_redraw()
+
+func attack_preview_at(cell: Vector2i) -> Array:
+	var actor = selected_unit()
+	if mode not in TARGETED_ATTACKS or actor.is_empty() or board.is_playing() or observation.current_faction!="undead" or observation.winner!="" or cell not in board.attack_range_cells:
+		return []
+	var origin = Hex.decode(actor.position)
+	if mode in ["OVERHEAD_STRIKE","KNOCKBACK","WAR_STOMP"]:
+		var target = {"team":"human","position":Hex.encode(cell)}
+		for u in observation.units:
+			if u.alive and Hex.decode(u.position)==cell:
+				target=u
+				break
+		if not Advantage.qualifies(actor,target,origin,observation.board.heights,observation.units):
+			return []
+	if mode!="SPEAR_THRUST":
+		return [cell]
+	for direction in Hex.DIRECTIONS:
+		if cell-origin in [direction,direction*2]:
+			var result = []
+			for step in [1,2]:
+				var hit = origin+direction*step
+				if hit in board.attack_range_cells:
+					result.append(hit)
+			return result
+	return [cell]
 
 func try_target(cell: Vector2i, kind: String):
 	for action in legal:

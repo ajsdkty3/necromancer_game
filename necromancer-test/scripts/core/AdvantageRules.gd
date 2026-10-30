@@ -8,11 +8,11 @@ static func qualifies(actor: Dictionary, target: Dictionary, from: Vector2i, hei
 	var target_cell = Hex.decode(target.position)
 	if Terrain.height_at(heights,from)>Terrain.height_at(heights,target_cell):
 		return true
-	if target.team==actor.team:
+	if target.get("is_corpse",false) or target.team==actor.team or target.team not in ["human","undead"]:
 		return false
 	var count = 0
 	for ally in units:
-		if not ally.alive or ally.team!=actor.team:
+		if not ally.alive or ally.get("is_corpse",false) or ally.team!=actor.team:
 			continue
 		var cell = from if ally.id==actor.id else Hex.decode(ally.position)
 		if Hex.distance(cell,target_cell)==1:

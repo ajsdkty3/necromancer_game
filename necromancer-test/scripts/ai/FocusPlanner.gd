@@ -11,9 +11,14 @@ const VALUES = {"vampire":10,"zombie":3}
 # avoids promising a kill that requires lucky rolls. No rule state is modified.
 func plan(observation: Dictionary) -> Dictionary:
 	var humans = observation.units.filter(func(u): return u.team == "human")
+	if observation.has("human_turn_order"):
+		var by_id = {}
+		for u in humans:
+			by_id[u.id] = u
+		humans = observation.human_turn_order.map(func(id): return by_id[id])
 	var best = {}
 	for target in observation.units:
-		if not target.alive or target.team == "human":
+		if not target.alive or target.get("is_corpse",false) or target.team == "human":
 			continue
 		var total = 0
 		var contributors = {}
@@ -34,6 +39,8 @@ func plan(observation: Dictionary) -> Dictionary:
 
 func potential_damage(o: Dictionary, actor: Dictionary, target: Dictionary) -> int:
 	var d = o.definitions[actor.archetype]
+	if d.kind == "BATTLE_ORDER":
+		return 0 # Support policy handles orders and marks, not ordinary attacks.
 	var budget = int(actor.ap)-int(d.cost)
 	if budget < 0:
 		return 0
@@ -64,7 +71,7 @@ func potential_damage(o: Dictionary, actor: Dictionary, target: Dictionary) -> i
 	while head < queue.size():
 		var cell: Vector2i = queue[head]
 		head += 1
-		if Hex.distance(cell,target_cell) <= int(d.range) and Terrain.attack_height_allowed(heights,cell,target_cell,d.kind):
+		if Hex.distance(cell,target_cell) <= int(d.range) and Terrain.attack_height_allowed(heights,cell,target_cell,d.kind,o.board.get("obstacles",{})):
 			var overhead = not d.has("knockback_cost") and int(actor.ap)-costs[cell]>=int(d.get("advantage_cost",d.cost)) and Advantage.qualifies(actor,target,cell,heights,o.units)
 			var shove = d.has("knockback_cost") and Hex.distance(cell,target_cell)<=int(d.knockback_range) and Advantage.qualifies(actor,target,cell,heights,o.units)
 			if shove or clean_shot(o,actor,cell,target_cell,overhead):
@@ -111,6 +118,6 @@ func clean_shot(o: Dictionary, actor: Dictionary, cell: Vector2i, target: Vector
 			continue
 		for ally in o.units:
 			var position = Hex.decode(ally.position)
-			if ally.alive and ally.team==actor.team and ally.id!=actor.id and position in [cell+direction,cell+direction*2] and Terrain.attack_height_allowed(heights,cell,position,d.kind) and (not overhead or Advantage.qualifies(actor,ally,cell,heights,o.units)):
+			if ally.alive and ally.team==actor.team and ally.id!=actor.id and position in [cell+direction,cell+direction*2] and Terrain.attack_height_allowed(heights,cell,position,d.kind,o.board.get("obstacles",{})) and (not overhead or Advantage.qualifies(actor,ally,cell,heights,o.units)):
 				return false
 	return true
